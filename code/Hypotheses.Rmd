@@ -1,0 +1,2429 @@
+---
+title: "Run model"
+output: html_notebook
+---
+
+```{r setup, include = TRUE}
+#### GENERAL ######
+library(tidyverse)
+library(readxl) ## read excel files
+library(parallel) ## parallelize runs
+library(devtools) ## package installation
+
+#### MODELS #####
+library(deSolve) ## ODE solver
+library(bbmle) ## likelihood analysis
+library(mclust) ## cluster models
+library(Rcatch22) ## time series classification
+
+##### STATISTICS ####
+library(Hmisc)
+library(fpc) ## cbdw
+library(clusterCrit) ## silhouette score
+library(oce)
+library(zoo)
+library(spatstat.utils)
+
+######## PALETTES ######
+library(RColorBrewer) 
+library(wesanderson)
+library(ghibli)
+library(NatParksPalettes)
+library(viridis)
+library(MetBrewer)
+library(PNWColors)
+
+####### PLOT MACHINERY ######
+library(directlabels)
+library(cowplot)
+library(scales)
+library(patchwork)
+library(ggh4x)
+library(ggrepel)
+```
+
+
+There are two different models:
+(1) Ordered infection model
+(2) Individual variation model
+
+Within each, we want to fit three groups of analyses: 
+(A) All individuals
+(B) Male vs. Female
+(C) Seasonal births - Winter (J/F/M), Spring (A/M/J), Summer (J/A/S), Fall (O/N/D)
+
+For each model, we want to capture the likelihood AND the AIC. 
+
+# Analysis of serological data
+## Load files
+Here, we want to also test what if we convert sero to log(sero)
+```{r}
+## our data for children
+data_sero <- read_excel("../data/seasonal_coronavirus_data.xlsx") %>% 
+  pivot_longer(6:9, names_to = "strain", values_to = "sero") %>%
+  select(Sex, Age_con, strain, sero, sample = `Collection date`) %>% 
+  mutate(Age_con = as.numeric(Age_con)) %>%
+  mutate(sample = as.Date(sample, format = "%Y.%m.%d"))
+
+## data for adults
+data_sero_adults <- read_excel("../data/Red cross samples against seasonal coronavirus.xlsx") %>% 
+  select(Age_con = Age, a_229E_S1 = 4, HKU1_S1 = 6, NL63_S1 = 7, OC43_HE = 5, Sex, sample = 9) %>% 
+  pivot_longer(2:5, names_to = "strain", values_to = "sero") %>% 
+  mutate(Age_con = as.numeric(Age_con)) %>% 
+  select(Sex, Age_con, strain, sero, sample) %>% 
+  mutate(sample = as.Date(sample, format = "%Y-%m-%d"))
+
+data_sero <- rbind(data_sero, data_sero_adults)
+
+
+edridge_longitudinal <- read_excel("../data/Edridge et al./Edridge_add_ID.xlsx")
+```
+
+
+## Longitudinal data - get reversion rate
+```{r}
+
+dataLong_a229e <- edridge_longitudinal %>% filter(Virus == "229E") %>% 
+  select(OD_value)
+dataGMM_a229e_Long <- Mclust(dataLong_a229e)
+dataLong_NL63 <- edridge_longitudinal %>% filter(Virus == "NL63") %>% 
+  select(OD_value)
+dataGMM_NL63_Long <- Mclust(dataLong_NL63)
+dataLong_HKU1 <- edridge_longitudinal %>% filter(Virus == "HKU1") %>% 
+  select(OD_value)
+dataGMM_HKU1_Long <- Mclust(dataLong_HKU1)
+dataLong_OC43 <- edridge_longitudinal %>% filter(Virus == "OC43") %>% 
+  select(OD_value)
+dataGMM_OC43_Long <- Mclust(dataLong_OC43)
+
+dataFull_a229e_Long <- edridge_longitudinal %>% 
+  filter(Virus == "229E") %>% 
+  mutate(Group = dataGMM_a229e_Long$classification)
+dataFull_NL63_Long <- edridge_longitudinal %>% 
+  filter(Virus == "NL63") %>% 
+  mutate(Group = dataGMM_NL63_Long$classification)
+dataFull_OC43_Long <- edridge_longitudinal %>% 
+  filter(Virus == "OC43") %>% 
+  mutate(Group = dataGMM_OC43_Long$classification)
+dataFull_HKU1_Long <- edridge_longitudinal %>% 
+  filter(Virus == "HKU1") %>% 
+  mutate(Group = dataGMM_HKU1_Long$classification)
+
+dataFull_longitudinal <- rbind(dataFull_a229e_Long, dataFull_HKU1_Long) %>%
+  rbind(dataFull_NL63_Long) %>%
+  rbind(dataFull_OC43_Long)
+
+## Plot
+plot_edridge <- dataFull_longitudinal %>%
+  mutate(Group = as.character(Group)) %>%
+  ggplot(aes(x = Date, y = OD_value)) + 
+  geom_line(color = "black", aes(linetype = Virus)) + 
+  geom_point(aes(color = Group), size = 0.8) + 
+  facet_wrap(~ID)
+plot_edridge
+  
+```
+
+
+```{r}
+test_reversion_rate <- dataFull_longitudinal %>%
+  group_by(ID, Virus) %>%
+  arrange(Date) %>%
+  mutate(
+    tag_sero = case_when(
+     Group > lag(Group) ~ "convert",
+     Group < lag(Group) ~ "revert"
+    )
+  ) %>%
+  filter(!is.na(tag_sero)) %>%
+  ungroup() %>%
+  select(ID, Virus,Date, tag_sero) %>%
+  group_by(ID, Virus) %>%
+  arrange(Date) %>%
+  mutate(time_diff = if_else(
+    tag_sero == "revert" & lag(tag_sero) == "convert",
+    Date - lag(Date),
+    NA
+  )) %>%
+  filter(!is.na(time_diff)) %>%
+  ungroup() %>%
+  #group_by(Virus) %>%
+  mutate(time_diff = as.numeric(gsub(" days", "", time_diff))) %>%
+  mutate(time_diff = time_diff/365) %>%
+  summarise(reversion_rate_05 = quantile(time_diff, 0.05),
+            reversion_rate_95 = quantile(time_diff, 0.95)
+            ) #%>%
+  #ungroup()
+
+```
+
+
+# Define fixed rho
+```{r}
+
+rho_05 <- 1/unname(test_reversion_rate$reversion_rate_05[1])
+rho_95 <- 1/unname(test_reversion_rate$reversion_rate_95[1])
+
+```
+
+## Add birth season
+Index off january 2020
+```{r}
+ref_date <- as.Date("2020-01-01", "%Y-%m-%d")
+
+data_sero <- data_sero %>% 
+  mutate(time_diff = difftime(sample, ref_date, units = "days")) %>% ## days from Jan. 2020 to now
+  mutate(time_diff = gsub(" days", "", time_diff),
+         time_diff = as.numeric(time_diff)/365) %>% 
+  mutate(time_rem = time_diff %% 1) %>% ## get the proportion of the year into the season
+  mutate(Age_remainder = Age_con - floor(Age_con)) %>% ## now we have the proportion of the current age a person has filled
+  mutate(Season_checker = time_rem - Age_remainder) %>% ## to get the time of year they were born
+  mutate(Season_checker = Season_checker %% 1) %>%
+  mutate(birth_season = case_when(
+    Season_checker >= 11/12 | Season_checker < 2/12 ~ "Winter",
+    Season_checker >= 2/12 & Season_checker < 5/12 ~ "Spring",
+    Season_checker >= 5/12 & Season_checker < 8/12 ~ "Summer",
+    Season_checker >= 8/12 & Season_checker < 11/12 ~ "Fall"
+  ))  %>% 
+  select(Sex, Age_con, strain, sero, birth_season)
+
+```
+
+## Sort <1 year into seropositive/negative
+```{r}
+
+#data_sero <- data_sero %>% mutate(sero = log(sero)) # comment in or out
+#data_sero <- data_sero %>% mutate(sero = log(sero)) # this looks more like percentages - log or loglog?
+
+dataClass_a229e <- data_sero %>% filter(strain == "a_229E_S1") %>% 
+  filter(Age_con < 1) %>%
+  select(sero)
+dataGMM_a229e <- Mclust(dataClass_a229e, 2)
+dataClass_NL63 <- data_sero %>% filter(strain == "NL63_S1") %>% 
+    filter(Age_con < 1) %>%
+  select(sero)
+dataGMM_NL63 <- Mclust(dataClass_NL63, 2)
+dataClass_OC43 <- data_sero %>% filter(strain == "OC43_HE") %>% 
+    filter(Age_con < 1) %>%
+  select(sero)
+dataGMM_OC43 <- Mclust(dataClass_OC43, 2)
+dataClass_HKU1 <- data_sero %>% filter(strain == "HKU1_S1") %>% 
+    filter(Age_con < 1) %>%
+  select(sero)
+dataGMM_HKU1 <- Mclust(dataClass_HKU1, 2)
+```
+
+## Assign <1 year cluster back to data 
+```{r}
+dataFull_a229e <- data_sero %>% 
+  filter(strain == "a_229E_S1") %>% 
+    filter(Age_con < 1) %>%
+  mutate(Group = dataGMM_a229e$classification)
+dataFull_NL63 <- data_sero %>% 
+  filter(strain == "NL63_S1") %>% 
+    filter(Age_con < 1) %>%
+  mutate(Group = dataGMM_NL63$classification)
+dataFull_OC43 <- data_sero %>% 
+  filter(strain == "OC43_HE") %>% 
+    filter(Age_con < 1) %>%
+  mutate(Group = dataGMM_OC43$classification)
+dataFull_HKU1 <- data_sero %>% 
+  filter(strain == "HKU1_S1") %>%
+    filter(Age_con < 1) %>%
+  mutate(Group = dataGMM_HKU1$classification)
+dataFull_infant <- rbind(dataFull_a229e, dataFull_NL63) %>%
+  rbind(dataFull_OC43) %>% 
+  rbind(dataFull_HKU1)
+```
+
+## get cutoff
+This code determines a cutoff of what is seronegative vs. seropositive
+```{r}
+cutoff <- dataFull_infant %>%
+  group_by(strain, Group) %>%
+  mutate(means_group = mean(sero, na.rm = T)) %>%
+  ungroup() %>%
+  select(strain, means_group) %>%
+  distinct() %>%
+  group_by(strain) %>%
+  summarise(cut = mean(means_group, na.rm = T)) %>%
+  ungroup()
+```
+
+## GMM on seropositive
+For individuals whose serostatus is positive, run another GMM
+```{r}
+###### a229e #########
+cut_a229e <- cutoff %>% filter(strain == "a_229E_S1")
+cut_a229e <- cut_a229e$cut
+dataClass_a229e <- data_sero %>% filter(strain == "a_229E_S1") %>% 
+  select(sero) %>% 
+  filter(sero > cut_a229e)
+dataGMM_a229e <- Mclust(dataClass_a229e)
+
+pdf("../Supplement/select_model_229E.pdf")
+plot(dataGMM_a229e$BIC) + title("229E-S1 compartment selection")
+dev.off()
+
+#ggsave("../Supplement/select_model_229E.jpg",get_a229E, width = 5, height = 4)
+
+###### nl63 #########
+cut_nl63 <- cutoff %>% filter(strain == "NL63_S1")
+cut_nl63 <- cut_nl63$cut
+dataClass_NL63 <- data_sero %>% filter(strain == "NL63_S1") %>% 
+  select(sero) %>% 
+  filter(sero > cut_nl63)
+dataGMM_NL63 <- Mclust(dataClass_NL63)
+
+pdf("../Supplement/select_model_NL63.pdf")
+plot(dataGMM_NL63$BIC) + title("NL63-S1 compartment selection")
+dev.off()
+
+####### oc43 ##########
+cut_oc43 <- cutoff %>% filter(strain == "OC43_HE")
+cut_oc43 <- cut_oc43$cut
+dataClass_OC43 <- data_sero %>% filter(strain == "OC43_HE") %>% 
+  select(sero) %>% 
+  filter(sero > cut_oc43)
+dataGMM_OC43 <- Mclust(dataClass_OC43)
+
+pdf("../Supplement/select_model_OC43.pdf")
+plot(dataGMM_OC43$BIC) + title("OC43-HE compartment selection")
+dev.off()
+
+##### HKU1 #######
+cut_hku1 <- cutoff %>% filter(strain == "HKU1_S1")
+cut_hku1 <- cut_hku1$cut
+dataClass_HKU1 <- data_sero %>% filter(strain == "HKU1_S1") %>% 
+  select(sero) %>% 
+  filter(sero > cut_hku1)
+dataGMM_HKU1 <- Mclust(dataClass_HKU1)
+
+pdf("../Supplement/select_model_HKU1.pdf")
+plot(dataGMM_HKU1$BIC) + title("HKU1-S1 compartment selection")
+dev.off()
+
+```
+
+## Assign seropositive back to data
+```{r}
+dataFull_a229e <- data_sero %>% 
+  filter(strain == "a_229E_S1") %>% 
+  filter(sero > cut_a229e) %>%
+  mutate(Group = dataGMM_a229e$classification)
+dataFull_NL63 <- data_sero %>% 
+  filter(strain == "NL63_S1") %>% 
+    filter(sero > cut_nl63) %>%
+  mutate(Group = dataGMM_NL63$classification)
+dataFull_OC43 <- data_sero %>% 
+  filter(strain == "OC43_HE") %>% 
+    filter(sero > cut_oc43) %>%
+  mutate(Group = dataGMM_OC43$classification)
+dataFull_HKU1 <- data_sero %>% 
+  filter(strain == "HKU1_S1") %>%
+    filter(sero > cut_hku1) %>%
+  mutate(Group = dataGMM_HKU1$classification)
+dataFull <- rbind(dataFull_a229e, dataFull_NL63) %>%
+  rbind(dataFull_OC43) %>% 
+  rbind(dataFull_HKU1)
+dataFull <- dataFull %>% 
+  mutate(Group = Group + 1) 
+dataFull_extras <- data_sero %>%
+  left_join(cutoff, by = "strain") %>% 
+  filter(sero < cut) %>% 
+  mutate(Group = 1) %>% 
+  mutate(cut = NULL)
+dataFull <- dataFull %>% rbind(dataFull_extras)
+```
+
+## remove extra files 
+```{r}
+rm(cutoff, data_sero, 
+   data_sero_adults, dataClass_a229e,
+   dataClass_HKU1, dataClass_NL63, 
+   dataClass_OC43, dataFull_a229e,
+   dataFull_HKU1, dataFull_OC43,
+   dataFull_NL63, dataFull_extras,
+   dataFull_infant, dataGMM_a229e, 
+   dataGMM_HKU1, dataGMM_NL63, dataGMM_OC43)
+```
+
+## Data for fitting
+
+Problem - spring and summer full of duplicates??
+
+```{r}
+write_csv(dataFull, "../data/data_hypotheses/gmm_out/dataFull.csv")
+```
+
+
+### All individuals
+```{r}
+sero_GMM <- dataFull %>%
+  mutate(Age_con = case_when(
+    Age_con < 1 ~  0.125*floor(Age_con/0.125),
+    Age_con < 5 & Age_con >= 1 ~ floor(Age_con),
+    Age_con >= 5 ~ 5*floor(Age_con/5)
+  )) %>%
+  mutate(individual = 1) %>%
+  # mutate(Age_con = round(Age_con, 2)) %>%
+  group_by(strain, Age_con) %>%
+  mutate(pop = sum(individual)) %>% ## population per age group
+  group_by(strain, Age_con, Group, pop) %>%
+  summarise(sero_pop = sum(individual)) %>%
+  summarise(sero_prop = sero_pop/pop) %>%
+  ungroup()
+check_mins <- sero_GMM %>% 
+  group_by(strain) %>% 
+  filter(Group == 1) %>% 
+  filter(sero_prop == max(sero_prop)) %>%
+  filter(Age_con == min(Age_con)) %>%
+  ungroup() %>% 
+  select(strain, immunity_switch = Age_con)
+sero_GMM <- sero_GMM %>% 
+  left_join(check_mins) %>%
+  group_by(strain) %>%
+  mutate(Type = case_when(
+    Age_con <= immunity_switch & Group != 1 ~ "M",
+    Age_con > immunity_switch | Group == 1 ~ "P"
+  )) %>%
+  ungroup()
+
+data_all <- sero_GMM
+
+write_csv(data_all, "../data/data_hypotheses/gmm_out/data_all.csv")
+```
+# 2-compartment GMM
+## Load files
+Here, we want to also test what if we convert sero to log(sero)
+```{r}
+## our data for children
+data_sero <- read_excel("../data/seasonal_coronavirus_data.xlsx") %>% 
+  pivot_longer(6:9, names_to = "strain", values_to = "sero") %>%
+  select(Sex, Age_con, strain, sero, sample = `Collection date`) %>% 
+  mutate(Age_con = as.numeric(Age_con)) %>%
+  mutate(sample = as.Date(sample, format = "%Y.%m.%d"))
+
+## other authors data for adults
+data_sero_adults <- read_excel("../data/Red cross samples against seasonal coronavirus.xlsx") %>% 
+  select(Age_con = Age, a_229E_S1 = 4, HKU1_S1 = 6, NL63_S1 = 7, OC43_HE = 5, Sex, sample = 9) %>% 
+  pivot_longer(2:5, names_to = "strain", values_to = "sero") %>% 
+  mutate(Age_con = as.numeric(Age_con)) %>% 
+  select(Sex, Age_con, strain, sero, sample) %>% 
+  mutate(sample = as.Date(sample, format = "%Y-%m-%d"))
+
+data_sero <- rbind(data_sero, data_sero_adults)
+```
+
+## Add birth season
+Adding a note here to talk to Tomas about the collection date of the samples. Right now, we know that the samples are all collected in J/F/M (Winter). We will assume midpoint as the reference point for now, later we can see if we get the exact sample date.
+```{r}
+ref_date <- as.Date("2020-01-01", "%Y-%m-%d")
+
+data_sero <- data_sero %>% 
+  mutate(time_diff = difftime(sample, ref_date, units = "days")) %>% ## days from Jan. 2020 to now
+  mutate(time_diff = gsub(" days", "", time_diff),
+         time_diff = as.numeric(time_diff)/365) %>% 
+  mutate(time_rem = time_diff %% 1) %>% ## get the proportion of the year into the season
+  mutate(Age_remainder = Age_con - floor(Age_con)) %>% ## now we have the proportion of the current age a person has filled
+  mutate(Season_checker = time_rem - Age_remainder) %>% ## to get the time of year they were born
+  mutate(Season_checker = Season_checker %% 1) %>%
+  mutate(birth_season = case_when(
+    Season_checker >= 11/12 | Season_checker < 2/12 ~ "Winter",
+    Season_checker >= 2/12 & Season_checker < 5/12 ~ "Spring",
+    Season_checker >= 5/12 & Season_checker < 8/12 ~ "Summer",
+    Season_checker >= 8/12 & Season_checker < 11/12 ~ "Fall"
+  ))  %>% 
+  select(Sex, Age_con, strain, sero, birth_season)
+
+```
+
+## Sort <1 year into seropositive/negative
+```{r}
+
+#data_sero <- data_sero %>% mutate(sero = log(sero)) # comment in or out
+#data_sero <- data_sero %>% mutate(sero = log(sero)) # this looks more like percentages - log or loglog?
+
+dataClass_a229e <- data_sero %>% filter(strain == "a_229E_S1") %>% 
+  filter(Age_con < 1) %>%
+  select(sero)
+dataGMM_a229e <- Mclust(dataClass_a229e, 2)
+dataClass_NL63 <- data_sero %>% filter(strain == "NL63_S1") %>% 
+    filter(Age_con < 1) %>%
+  select(sero)
+dataGMM_NL63 <- Mclust(dataClass_NL63, 2)
+dataClass_OC43 <- data_sero %>% filter(strain == "OC43_HE") %>% 
+    filter(Age_con < 1) %>%
+  select(sero)
+dataGMM_OC43 <- Mclust(dataClass_OC43, 2)
+dataClass_HKU1 <- data_sero %>% filter(strain == "HKU1_S1") %>% 
+    filter(Age_con < 1) %>%
+  select(sero)
+dataGMM_HKU1 <- Mclust(dataClass_HKU1, 2)
+```
+
+## Assign <1 year cluster back to data 
+```{r}
+dataFull_a229e <- data_sero %>% 
+  filter(strain == "a_229E_S1") %>% 
+    filter(Age_con < 1) %>%
+  mutate(Group = dataGMM_a229e$classification)
+dataFull_NL63 <- data_sero %>% 
+  filter(strain == "NL63_S1") %>% 
+    filter(Age_con < 1) %>%
+  mutate(Group = dataGMM_NL63$classification)
+dataFull_OC43 <- data_sero %>% 
+  filter(strain == "OC43_HE") %>% 
+    filter(Age_con < 1) %>%
+  mutate(Group = dataGMM_OC43$classification)
+dataFull_HKU1 <- data_sero %>% 
+  filter(strain == "HKU1_S1") %>%
+    filter(Age_con < 1) %>%
+  mutate(Group = dataGMM_HKU1$classification)
+dataFull_infant <- rbind(dataFull_a229e, dataFull_NL63) %>%
+  rbind(dataFull_OC43) %>% 
+  rbind(dataFull_HKU1)
+```
+
+
+## get cutoff
+This code determines a cutoff of what is seronegative vs. seropositive
+```{r}
+cutoff <- dataFull_infant %>%
+  group_by(strain, Group) %>%
+  mutate(means_group = mean(sero, na.rm = T)) %>%
+  ungroup() %>%
+  select(strain, means_group) %>%
+  distinct() %>%
+  group_by(strain) %>%
+  summarise(cut = mean(means_group, na.rm = T)) %>%
+  ungroup()
+cut_a229e <- cutoff %>% filter(strain == "a_229E_S1")
+cut_a229e <- cut_a229e$cut
+
+cut_nl63 <- cutoff %>% filter(strain == "NL63_S1")
+cut_nl63 <- cut_nl63$cut
+
+cut_oc43 <- cutoff %>% filter(strain == "OC43_HE")
+cut_oc43 <- cut_oc43$cut
+
+cut_hku1 <- cutoff %>% filter(strain == "HKU1_S1")
+cut_hku1 <- cut_hku1$cut
+```
+
+
+## Assign seropositive back to data
+```{r}
+dataFull_a229e <- data_sero %>% 
+  filter(strain == "a_229E_S1") %>% 
+  mutate(Group = ifelse(sero > cut_a229e, 1, 0))
+dataFull_NL63 <- data_sero %>% 
+  filter(strain == "NL63_S1") %>% 
+  mutate(Group = ifelse(sero > cut_nl63, 1, 0))
+dataFull_OC43 <- data_sero %>% 
+  filter(strain == "OC43_HE") %>% 
+  mutate(Group = ifelse(sero > cut_oc43, 1, 0))
+dataFull_HKU1 <- data_sero %>% 
+  filter(strain == "HKU1_S1") %>%
+  mutate(Group = ifelse(sero > cut_hku1, 1, 0))
+dataFull <- rbind(dataFull_a229e, dataFull_NL63) %>%
+  rbind(dataFull_OC43) %>% 
+  rbind(dataFull_HKU1)
+```
+
+## remove extra files 
+```{r}
+rm(data_sero, 
+   data_sero_adults, dataClass_a229e,
+   dataClass_HKU1, dataClass_NL63, 
+   dataClass_OC43, dataFull_a229e,
+   dataFull_HKU1, dataFull_OC43,
+   dataFull_NL63,
+   dataFull_infant, dataGMM_a229e, 
+   dataGMM_HKU1, dataGMM_NL63, dataGMM_OC43)
+```
+
+
+```{r}
+write_csv(dataFull, "../data/data_hypotheses/gmm_out/dataFull2.csv")
+```
+
+
+## All individuals
+```{r}
+sero_GMM <- dataFull %>%
+  mutate(Age_con = case_when(
+    Age_con < 1 ~  0.125*floor(Age_con/0.125),
+    Age_con < 5 & Age_con >= 1 ~ floor(Age_con),
+    Age_con >= 5 ~ 5*floor(Age_con/5)
+  )) %>%
+  mutate(individual = 1) %>%
+  # mutate(Age_con = round(Age_con, 2)) %>%
+  group_by(strain, Age_con) %>%
+  mutate(pop = sum(individual)) %>% ## population per age group
+  group_by(strain, Age_con, Group, pop) %>%
+  summarise(sero_pop = sum(individual)) %>%
+  summarise(sero_prop = sero_pop/pop) %>%
+  ungroup()
+check_mins <- sero_GMM %>% 
+  group_by(strain) %>% 
+  filter(Group == 0) %>% 
+  filter(sero_prop == max(sero_prop)) %>%
+  filter(Age_con == min(Age_con)) %>%
+  ungroup() %>% 
+  select(strain, immunity_switch = Age_con)
+sero_GMM <- sero_GMM %>% 
+  left_join(check_mins) %>%
+  mutate(Group = Group + 1) %>%
+  group_by(strain) %>%
+  mutate(Type = case_when(
+    Age_con <= immunity_switch & Group != 1 ~ "M",
+    Age_con > immunity_switch | Group == 1 ~ "P"
+  )) %>%
+  ungroup()
+
+data_all <- sero_GMM
+
+write_csv(data_all, "../data/data_hypotheses/gmm_out/data_all2.csv")
+
+```
+
+
+# Ordered infection model eqns
+## With 4 Groups
+```{r}
+ordered_infection_model_4 <- function(t, y, pars){ 
+  # State variables
+  P_0 <- y[1]
+  M_1 <- y[2]
+  P_1 <- y[3]
+  M_2 <- y[4]
+  P_2 <- y[5]
+  M_3 <- y[6]
+  P_3 <- y[7]
+  M_4 <- y[8]
+  P_4 <- y[9]
+
+  # Fit parameter values
+  rho_m <- pars["rho_m"] #maternal immunuty wanning stage
+  w1 <- pars["w1"] 
+  w2 <- pars["w2"] 
+  w3 <- pars["w3"] 
+  rho_4 <- pars["rho_4"] # maximum waning of immmunity
+
+  b0 <- pars["b0"] 
+  b1 <- pars["b1"]
+  b2 <- pars["b2"]
+  lambda_3 <- pars["lambda_3"]
+
+  ## Calculated pars
+  rho_3 <- w3*rho_4
+  rho_2 <- w2*rho_3
+  rho_1 <- w1*rho_2
+  
+  lambda_2 <- b2*lambda_3
+  lambda_1 <- b1*lambda_2
+  lambda_0 <- b0*lambda_1
+  
+  # Equations
+  dP_0 <- rho_1*P_1 - lambda_0*P_0 + (rho_m*(M_1+M_2+M_3+M_4))
+  
+  dM_1 <- -rho_m*M_1
+  dP_1 <- + rho_2*P_2 + lambda_0*P_0 - lambda_1*P_1 - rho_1*P_1
+  
+  dM_2 <- -rho_m*M_2
+  dP_2 <- + rho_3*P_3 + lambda_1*P_1 - lambda_2*P_2 - rho_2*P_2
+  
+  dM_3 <- -rho_m*M_3
+  dP_3 <- + rho_4*P_4 + lambda_2*P_2 - lambda_3*P_3 - rho_3*P_3
+  
+  dM_4 <- -rho_m*M_4
+  dP_4 <- lambda_3*P_3 - rho_4*P_4
+  
+  # Return list of gradients 
+  out <- c(dP_0, dM_1, dP_1, dM_2, dP_2, dM_3, dP_3, dM_4, dP_4)
+  list(out) 
+}
+```
+
+## With 5 groups 
+```{r}
+ordered_infection_model_5 <- function(t, y, pars){ 
+  # State variables
+  P_0 <- y[1]
+  M_1 <- y[2]
+  P_1 <- y[3]
+  M_2 <- y[4]
+  P_2 <- y[5]
+  M_3 <- y[6]
+  P_3 <- y[7]
+  M_4 <- y[8]
+  P_4 <- y[9]
+  M_5 <- y[10]
+  P_5 <- y[11] ## SLL edit: state variables always have to appear in the same order across instantiation, equations, outputs, and initial conditions
+  
+  # Fit parameter values
+  rho_m <- pars["rho_m"] #maternal immunuty wanning stage
+  w1 <- pars["w1"] 
+  w2 <- pars["w2"] 
+  w3 <- pars["w3"] 
+  w4 <- pars["w4"]
+  rho_5 <- pars["rho_5"] # maximum waning of immmunity
+
+  b0 <- pars["b0"] 
+  b1 <- pars["b1"]
+  b2 <- pars["b2"]
+  b3 <- pars["b3"]
+  lambda_4 <- pars["lambda_4"]
+
+  ## Calculated pars
+  rho_4 <- w4*rho_5
+  rho_3 <- w3*rho_4
+  rho_2 <- w2*rho_3
+  rho_1 <- w1*rho_2
+  
+  lambda_3 <- b3*lambda_4
+  lambda_2 <- b2*lambda_3
+  lambda_1 <- b1*lambda_2
+  lambda_0 <- b0*lambda_1
+  
+  # Equations
+  
+  dP_0 <- rho_1*P_1 - lambda_0*P_0 + (rho_m*(M_1+M_2+M_3+M_4+M_5))
+  
+  dM_1 <- -rho_m*M_1
+  dP_1 <- + rho_2*P_2 + lambda_0*P_0 - lambda_1*P_1 - rho_1*P_1
+  
+  dM_2 <- -rho_m*M_2
+  dP_2 <- + rho_3*P_3 + lambda_1*P_1 - lambda_2*P_2 - rho_2*P_2
+  
+  dM_3 <- -rho_m*M_3
+  dP_3 <- + rho_4*P_4 + lambda_2*P_2 - lambda_3*P_3 - rho_3*P_3
+  
+  dM_4 <- -rho_m*M_4
+  dP_4 <- + rho_5*P_5 + lambda_3*P_3 - lambda_4*P_4 - rho_4*P_4
+  
+  dM_5 <- -rho_m*M_5
+  dP_5 <- lambda_4*P_4 - rho_5*P_5
+  
+  # Return list of gradients 
+  out <- c(dP_0, dM_1, dP_1, dM_2, dP_2, dM_3, dP_3, dM_4, dP_4, dM_5,dP_5)
+  list(out) 
+}
+```
+
+
+# Ordered infection 0-waning model eqns
+## With 4 Groups
+```{r}
+ordered_infection_waning_model_4 <- function(t, y, pars){ 
+  # State variables
+  P_0 <- y[1]
+  M_1 <- y[2]
+  P_1 <- y[3]
+  M_2 <- y[4]
+  P_2 <- y[5]
+  M_3 <- y[6]
+  P_3 <- y[7]
+  M_4 <- y[8]
+  P_4 <- y[9]
+
+    # Fit parameter values
+  rho_m <- pars["rho_m"] #maternal immunuty wanning stage
+  w1 <- pars["w1"] 
+  w2 <- pars["w2"] 
+  w3 <- pars["w3"] 
+  rho_4 <- pars["rho_4"] # maximum waning of immmunity
+
+  b0 <- pars["b0"] 
+  b1 <- pars["b1"]
+  b2 <- pars["b2"]
+  lambda_3 <- pars["lambda_3"]
+
+  ## Calculated pars
+  rho_3 <- w3*rho_4
+  rho_2 <- w2*rho_3
+  rho_1 <- w1*rho_2
+  
+  lambda_2 <- b2*lambda_3
+  lambda_1 <- b1*lambda_2
+  lambda_0 <- b0*lambda_1
+
+  # Equations
+  dP_0 <- rho_1*P_1 - lambda_0*P_0 + (rho_m*(M_1+M_2+M_3+M_4)) + rho_2*P_2 + rho_3*P_3 + rho_4*P_4
+  
+  dM_1 <- -rho_m*M_1
+  dP_1 <-  + lambda_0*P_0 - lambda_1*P_1 - rho_1*P_1
+  
+  dM_2 <- -rho_m*M_2
+  dP_2 <-  + lambda_1*P_1 - lambda_2*P_2 - rho_2*P_2
+  
+  dM_3 <- -rho_m*M_3
+  dP_3 <-  + lambda_2*P_2 - lambda_3*P_3 - rho_3*P_3
+  
+  dM_4 <- -rho_m*M_4
+  dP_4 <- lambda_3*P_3 - rho_4*P_4
+  
+  # Return list of gradients 
+  out <- c(dP_0, dM_1, dP_1, dM_2, dP_2, dM_3, dP_3, dM_4, dP_4)
+  list(out) 
+}
+```
+
+## With 5 groups 
+```{r}
+ordered_infection_waning_model_5 <- function(t, y, pars){ 
+  # State variables
+  P_0 <- y[1]
+  M_1 <- y[2]
+  P_1 <- y[3]
+  M_2 <- y[4]
+  P_2 <- y[5]
+  M_3 <- y[6]
+  P_3 <- y[7]
+  M_4 <- y[8]
+  P_4 <- y[9]
+  M_5 <- y[10]
+  P_5 <- y[11] ## SLL edit: state variables always have to appear in the same order across instantiation, equations, outputs, and initial conditions
+  
+    # Fit parameter values
+  rho_m <- pars["rho_m"] #maternal immunuty wanning stage
+  w1 <- pars["w1"] 
+  w2 <- pars["w2"] 
+  w3 <- pars["w3"] 
+  w4 <- pars["w4"]
+  rho_5 <- pars["rho_5"] # maximum waning of immmunity
+
+  b0 <- pars["b0"] 
+  b1 <- pars["b1"]
+  b2 <- pars["b2"]
+  b3 <- pars["b3"]
+  lambda_4 <- pars["lambda_4"]
+
+  ## Calculated pars
+  rho_4 <- w4*rho_5
+  rho_3 <- w3*rho_4
+  rho_2 <- w2*rho_3
+  rho_1 <- w1*rho_2
+  
+  lambda_3 <- b3*lambda_4
+  lambda_2 <- b2*lambda_3
+  lambda_1 <- b1*lambda_2
+  lambda_0 <- b0*lambda_1
+  
+  # Equations
+  
+  dP_0 <- rho_1*P_1 - lambda_0*P_0 + (rho_m*(M_1+M_2+M_3+M_4+M_5)) + rho_2*P_2 + rho_3*P_3 + rho_4*P_4 + rho_5*P_5
+  
+  dM_1 <- -rho_m*M_1
+  dP_1 <-  + lambda_0*P_0 - lambda_1*P_1 - rho_1*P_1
+  
+  dM_2 <- -rho_m*M_2
+  dP_2 <-  + lambda_1*P_1 - lambda_2*P_2 - rho_2*P_2
+  
+  dM_3 <- -rho_m*M_3
+  dP_3 <-  + lambda_2*P_2 - lambda_3*P_3 - rho_3*P_3
+  
+  dM_4 <- -rho_m*M_4
+  dP_4 <-  + lambda_3*P_3 - lambda_4*P_4 - rho_4*P_4
+  
+  dM_5 <- -rho_m*M_5
+  dP_5 <- lambda_4*P_4 - rho_5*P_5
+  
+  # Return list of gradients 
+  out <- c(dP_0, dM_1, dP_1, dM_2, dP_2, dM_3, dP_3, dM_4, dP_4, dM_5,dP_5)
+  list(out) 
+}
+```
+
+
+# Individual variation model eqns
+## With 4 groups
+```{r}
+variation_infection_model_4 <- function(t, y, pars){ 
+  # State variables
+  P_0 <- y[1]
+  
+  M_1 <- y[2]
+  P_1 <- y[3]
+  
+  M_2 <- y[4]
+  P_2 <- y[5]
+  
+  M_3 <- y[6]
+  P_3 <- y[7]
+  
+  M_4 <- y[8]
+  P_4 <- y[9]
+
+  
+  # Parameter values
+  rho_m <- pars["rho_m"] #maternal immunity waning stage
+  w1 <- pars["w1"]
+  w2 <- pars["w2"] 
+  w3 <- pars["w3"] 
+  rho_4 <- pars["rho_4"] 
+  
+  l43 <- pars["l43"]
+  l32 <- pars["l32"]
+  l21 <- pars["l21"]
+  l10 <- pars["l10"]
+  
+  b0 <- pars["b0"]
+  b1 <- pars["b1"]
+  b2 <- pars["b2"]
+
+  # calculated params 
+  rho_3 <- w3*rho_4
+  rho_2 <- w2*rho_3
+  rho_1 <- w1*rho_2
+  
+  l42 <- b2*l43
+  l41 <- b1*l42
+  l40 <- b0*l41
+  
+  l31 <- b1*l32
+  l30 <- b0*l31
+  
+  l20 <- b0*l21
+  
+  # rates in 
+  seroconvert_into_1 <- l10*P_0
+  seroconvert_into_2 <- l20*P_0 + l21*P_1
+  seroconvert_into_3 <- l30*P_0 + l31*P_1 + l32*P_2
+  seroconvert_into_4 <- l40*P_0 + l41*P_1 + l42*P_2 + l43*P_3
+  
+  maternal_revert_into_0 <- rho_m*(M_1 + M_2 + M_3 + M_4)
+  
+  # rates out 
+  seroconvert_outof_0 <- l10*P_0 + l20*P_0 + l30*P_0 + l40*P_0
+  seroconvert_outof_1 <- l21*P_1 + l31*P_1 + l41*P_1
+  seroconvert_outof_2 <- l32*P_2 + l42*P_2
+  seroconvert_outof_3 <- l43*P_3
+  
+  # Equations
+  
+  dP_0 <- -seroconvert_outof_0 + maternal_revert_into_0 + rho_1*P_1
+  
+  dM_1 <- -rho_m*M_1
+  dP_1 <- +seroconvert_into_1  - seroconvert_outof_1 - rho_1*P_1 + rho_2*P_2
+  
+  dM_2 <- -rho_m*M_2
+  dP_2 <- seroconvert_into_2 - seroconvert_outof_2 - rho_2*P_2 + rho_3*P_3
+  
+  dM_3 <- -rho_m*M_3
+  dP_3 <- seroconvert_into_3 - seroconvert_outof_3 - rho_3*P_3 + rho_4*P_4
+  
+  dM_4 <- -rho_m*M_4
+  dP_4 <- seroconvert_into_4 - rho_4*P_4
+
+  
+  # Return list of gradients 
+  out <- c(dP_0, dM_1, dP_1, dM_2, dP_2, dM_3, dP_3, dM_4, dP_4)
+  list(out) 
+}
+```
+
+## With 5 groups
+```{r}
+variation_infection_model_5 <- function(t, y, pars){ 
+  # State variables
+  P_0 <- y[1]
+  
+  M_1 <- y[2]
+  P_1 <- y[3]
+  
+  M_2 <- y[4]
+  P_2 <- y[5]
+  
+  M_3 <- y[6]
+  P_3 <- y[7]
+  
+  M_4 <- y[8]
+  P_4 <- y[9]
+  
+  M_5 <- y[10]
+  P_5 <- y[11]
+  
+  # Parameter values
+  rho_m <- pars["rho_m"] #maternal immunity waning stage
+  w1 <- pars["w1"]
+  w2 <- pars["w2"] 
+  w3 <- pars["w3"] 
+  w4 <- pars["w4"]
+  rho_5 <- pars["rho_5"] 
+  
+  l54 <- pars["l54"]
+  l43 <- pars["l43"]
+  l32 <- pars["l32"]
+  l21 <- pars["l21"]
+  l10 <- pars["l10"]
+  
+  b0 <- pars["b0"]
+  b1 <- pars["b1"]
+  b2 <- pars["b2"]
+  b3 <- pars["b3"]
+
+  # calculated params 
+  rho_4 <- w4*rho_5
+  rho_3 <- w3*rho_4
+  rho_2 <- w2*rho_3
+  rho_1 <- w1*rho_2
+  
+  l53 <- b3*l54
+  l52 <- b2*l53
+  l51 <- b1*l52
+  l50 <- b0*l51
+  
+  l42 <- b2*l43
+  l41 <- b1*l42
+  l40 <- b0*l41
+  
+  l31 <- b1*l32
+  l30 <- b0*l31
+  
+  l20 <- b0*l21
+  
+  # rates in 
+  seroconvert_into_1 <- l10*P_0
+  seroconvert_into_2 <- l20*P_0 + l21*P_1
+  seroconvert_into_3 <- l30*P_0 + l31*P_1 + l32*P_2
+  seroconvert_into_4 <- l40*P_0 + l41*P_1 + l42*P_2 + l43*P_3
+  seroconvert_into_5 <- l50*P_0 + l51*P_1 + l52*P_2 + l53*P_3 + l54*P_4
+
+  maternal_revert_into_0 <- rho_m*(M_1 + M_2 + M_3 + M_4 + M_5)
+  
+  # rates out 
+  seroconvert_outof_0 <- P_0*(l10 + l20 + l30 + l40 + l50)
+  seroconvert_outof_1 <- P_1*(l21 + l31 + l41 + l51)
+  seroconvert_outof_2 <- P_2*(l32 + l42 + l52)
+  seroconvert_outof_3 <- P_3*(l43 + l53)
+  seroconvert_outof_4 <- P_4*(l54)
+
+  # Equations
+  # problem with the seroconversion functions
+  dP_0 <- + maternal_revert_into_0 - seroconvert_outof_0 + rho_1*P_1 
+  
+  dM_1 <- -rho_m*M_1
+  dP_1 <- seroconvert_into_1  - seroconvert_outof_1 - rho_1*P_1 + rho_2*P_2
+  
+  dM_2 <- -rho_m*M_2
+  dP_2 <- seroconvert_into_2 - seroconvert_outof_2 - rho_2*P_2 + rho_3*P_3
+  
+  dM_3 <- -rho_m*M_3
+  dP_3 <- seroconvert_into_3 - seroconvert_outof_3 - rho_3*P_3 + rho_4*P_4
+  
+  dM_4 <- -rho_m*M_4
+  dP_4 <- seroconvert_into_4 - seroconvert_outof_4 - rho_4*P_4 + rho_5*P_5
+
+  dM_5 <- -rho_m*M_5
+  dP_5 <- seroconvert_into_5 - rho_5*P_5
+
+  
+  # Return list of gradients 
+  out <- c(dP_0, dM_1, dP_1, dM_2, dP_2, dM_3, dP_3, dM_4, dP_4, dM_5, dP_5)
+  list(out) 
+}
+```
+
+
+# Individual variation 0-waning model eqns
+## With 4 groups
+```{r}
+variation_infection_waning_model_4 <- function(t, y, pars){ 
+  # State variables
+  P_0 <- y[1]
+  
+  M_1 <- y[2]
+  P_1 <- y[3]
+  
+  M_2 <- y[4]
+  P_2 <- y[5]
+  
+  M_3 <- y[6]
+  P_3 <- y[7]
+  
+  M_4 <- y[8]
+  P_4 <- y[9]
+
+  
+  # Parameter values
+  rho_m <- pars["rho_m"] #maternal immunity waning stage
+  w1 <- pars["w1"]
+  w2 <- pars["w2"] 
+  w3 <- pars["w3"] 
+  rho_4 <- pars["rho_4"] 
+  
+  l43 <- pars["l43"]
+  l32 <- pars["l32"]
+  l21 <- pars["l21"]
+  l10 <- pars["l10"]
+  
+  b0 <- pars["b0"]
+  b1 <- pars["b1"]
+  b2 <- pars["b2"]
+
+  # calculated params 
+  rho_3 <- w3*rho_4
+  rho_2 <- w2*rho_3
+  rho_1 <- w1*rho_2
+  
+  l42 <- b2*l43
+  l41 <- b1*l42
+  l40 <- b0*l41
+  
+  l31 <- b1*l32
+  l30 <- b0*l31
+  
+  l20 <- b0*l21
+  
+  # rates in 
+  seroconvert_into_1 <- l10*P_0
+  seroconvert_into_2 <- l20*P_0 + l21*P_1
+  seroconvert_into_3 <- l30*P_0 + l31*P_1 + l32*P_2
+  seroconvert_into_4 <- l40*P_0 + l41*P_1 + l42*P_2 + l43*P_3
+  
+  maternal_revert_into_0 <- rho_m*(M_1 + M_2 + M_3 + M_4)
+  
+  # rates out 
+  seroconvert_outof_0 <- l10*P_0 + l20*P_0 + l30*P_0 + l40*P_0
+  seroconvert_outof_1 <- l21*P_1 + l31*P_1 + l41*P_1
+  seroconvert_outof_2 <- l32*P_2 + l42*P_2
+  seroconvert_outof_3 <- l43*P_3
+  
+  # Equations
+  
+  dP_0 <- -seroconvert_outof_0 + maternal_revert_into_0 + rho_1*P_1 + rho_2*P_2 + rho_3*P_3 + rho_4*P_4
+  
+  dM_1 <- -rho_m*M_1
+  dP_1 <- +seroconvert_into_1  - seroconvert_outof_1 - rho_1*P_1 
+  
+  dM_2 <- -rho_m*M_2
+  dP_2 <- seroconvert_into_2 - seroconvert_outof_2 - rho_2*P_2 
+  
+  dM_3 <- -rho_m*M_3
+  dP_3 <- seroconvert_into_3 - seroconvert_outof_3 - rho_3*P_3 
+  
+  dM_4 <- -rho_m*M_4
+  dP_4 <- seroconvert_into_4 - rho_4*P_4
+
+  
+  # Return list of gradients 
+  out <- c(dP_0, dM_1, dP_1, dM_2, dP_2, dM_3, dP_3, dM_4, dP_4)
+  list(out) 
+}
+```
+
+## With 5 groups
+```{r}
+variation_infection_waning_model_5 <- function(t, y, pars){ 
+  # State variables
+  P_0 <- y[1]
+  
+  M_1 <- y[2]
+  P_1 <- y[3]
+  
+  M_2 <- y[4]
+  P_2 <- y[5]
+  
+  M_3 <- y[6]
+  P_3 <- y[7]
+  
+  M_4 <- y[8]
+  P_4 <- y[9]
+  
+  M_5 <- y[10]
+  P_5 <- y[11]
+  
+  # Parameter values
+  rho_m <- pars["rho_m"] #maternal immunity waning stage
+  w1 <- pars["w1"]
+  w2 <- pars["w2"] 
+  w3 <- pars["w3"] 
+  w4 <- pars["w4"]
+  rho_5 <- pars["rho_5"] 
+  
+  l54 <- pars["l54"]
+  l43 <- pars["l43"]
+  l32 <- pars["l32"]
+  l21 <- pars["l21"]
+  l10 <- pars["l10"]
+  
+  b0 <- pars["b0"]
+  b1 <- pars["b1"]
+  b2 <- pars["b2"]
+  b3 <- pars["b3"]
+
+  # calculated params 
+  rho_4 <- w4*rho_5
+  rho_3 <- w3*rho_4
+  rho_2 <- w2*rho_3
+  rho_1 <- w1*rho_2
+  
+  l53 <- b3*l54
+  l52 <- b2*l53
+  l51 <- b1*l52
+  l50 <- b0*l51
+  
+  l42 <- b2*l43
+  l41 <- b1*l42
+  l40 <- b0*l41
+  
+  l31 <- b1*l32
+  l30 <- b0*l31
+  
+  l20 <- b0*l21
+  
+  # rates in 
+  seroconvert_into_1 <- l10*P_0
+  seroconvert_into_2 <- l20*P_0 + l21*P_1
+  seroconvert_into_3 <- l30*P_0 + l31*P_1 + l32*P_2
+  seroconvert_into_4 <- l40*P_0 + l41*P_1 + l42*P_2 + l43*P_3
+  seroconvert_into_5 <- l50*P_0 + l51*P_1 + l52*P_2 + l53*P_3 + l54*P_4
+
+  maternal_revert_into_0 <- rho_m*(M_1 + M_2 + M_3 + M_4 + M_5)
+  
+  # rates out 
+  seroconvert_outof_0 <- P_0*(l10 + l20 + l30 + l40 + l50)
+  seroconvert_outof_1 <- P_1*(l21 + l31 + l41 + l51)
+  seroconvert_outof_2 <- P_2*(l32 + l42 + l52)
+  seroconvert_outof_3 <- P_3*(l43 + l53)
+  seroconvert_outof_4 <- P_4*(l54)
+
+  # Equations
+  # problem with the seroconversion functions
+  dP_0 <- + maternal_revert_into_0 - seroconvert_outof_0 + rho_1*P_1  + rho_2*P_2 + rho_3*P_3 + rho_4*P_4 + rho_5*P_5
+  
+  dM_1 <- -rho_m*M_1
+  dP_1 <- seroconvert_into_1  - seroconvert_outof_1 - rho_1*P_1 
+  
+  dM_2 <- -rho_m*M_2
+  dP_2 <- seroconvert_into_2 - seroconvert_outof_2 - rho_2*P_2 
+  
+  dM_3 <- -rho_m*M_3
+  dP_3 <- seroconvert_into_3 - seroconvert_outof_3 - rho_3*P_3 
+  
+  dM_4 <- -rho_m*M_4
+  dP_4 <- seroconvert_into_4 - seroconvert_outof_4 - rho_4*P_4 
+
+  dM_5 <- -rho_m*M_5
+  dP_5 <- seroconvert_into_5 - rho_5*P_5
+
+  
+  # Return list of gradients 
+  out <- c(dP_0, dM_1, dP_1, dM_2, dP_2, dM_3, dP_3, dM_4, dP_4, dM_5, dP_5)
+  list(out) 
+}
+```
+
+
+# Binary
+```{r}
+serocatalytic_2_model <- function(t, y, pars){ 
+  # State variables
+  P_0 <- y[1]
+  M_1 <- y[2]
+  P_1 <- y[3]
+
+  # Fit parameter values
+  rho_m <- pars["rho_m"] #maternal immunuty wanning stage
+  rho_1 <- pars["rho_1"] # maximum waning of immmunity
+  lambda_0 <- pars["lambda_0"]
+  
+  # Equations
+  dP_0 <- rho_1*P_1 - lambda_0*P_0 + (rho_m*M_1)
+  
+  dM_1 <- -rho_m*M_1
+  dP_1 <- + lambda_0*P_0  - rho_1*P_1
+  
+  # Return list of gradients 
+  out <- c(dP_0, dM_1, dP_1)
+  list(out) 
+}
+```
+
+
+# Likelihood functions
+
+## Ordered infection
+#### 5 strain
+```{r}
+#data <- sero_A
+#ODE_fun <- ordered_infection_model_5 or ordered_infection_waning_model_5
+
+loglik5_ordered <- function(rho_m, 
+                            rho,
+                   b0, b1, 
+                   b2, b3,
+                   lambda_4, sigma){
+  paras <- c(rho_m = rho_m, w1 = 1,
+            w2 = 1, w3 = 1,
+            w4 = 1, rho_5 = rho, 
+            b0 = b0, b1 = b1,
+            b2 = b2, b3 = b3,
+            lambda_4 = lambda_4, sigma = sigma)
+  # print(pars)
+  
+  times <- seq(t_start,70, by = 0.125) #by = .125)
+
+  serocatalytic_model_out <- ode(y = init, times = times, func = ODE_fun, parms = paras) %>% as.data.frame()
+  
+  ## double check the population math 
+  df_out <- serocatalytic_model_out %>%
+    pivot_longer(-time, names_to = "State", values_to = "Value") %>% 
+    separate(State, into = c("Type", "Serostatus"), sep = "_") %>% 
+    group_by(time) %>%
+    mutate(pop = sum(Value)) %>%
+    ungroup() %>% 
+    group_by(Serostatus, Type, time, pop) %>% 
+    summarise(.groups = "keep", Value = sum(Value)) %>% 
+    mutate(Prop = Value/pop) %>%
+    ungroup() %>% 
+    rename(Group = Serostatus) %>%
+    mutate(Group = as.numeric(Group)+1) %>%
+    select(time, Prop, Type, Group) %>%
+    inner_join(data %>% select(time = Age_con,Group, Type), by = c("time","Type", "Group")) %>% 
+    arrange(time, Type, Group)
+  
+  ll <- -sum(dnorm(x=data$sero_prop,mean=df_out$Prop,sd=sigma,log=TRUE))
+  
+  ll = if_else(is.na(ll) | is.infinite(ll), 10^6, ll)
+  
+  return(ll)
+}
+```
+
+#### 4 strain
+```{r}
+#data <- sero_A
+# ODE_fun
+# t_start
+
+loglik4_ordered <- function(rho_m, 
+                            rho,
+                   b0, b1, 
+                   b2, lambda_3,
+                    sigma){
+  paras <- c(rho_m = rho_m, w1 = 1,
+            w2 = 1, w3 = 1,
+            rho_4 = rho, 
+            b0 = b0, b1 = b1,
+            b2 = b2, lambda_3 = lambda_3,
+            sigma = sigma)
+  # print(pars)
+  
+  times <- seq(t_start,70, by = 0.125) #by = .125)
+
+  serocatalytic_model_out <- ode(y = init, times = times, func = ODE_fun, parms = paras) %>% as.data.frame()
+  
+  ## double check the population math 
+  df_out <- serocatalytic_model_out %>%
+    pivot_longer(-time, names_to = "State", values_to = "Value") %>% 
+    separate(State, into = c("Type", "Serostatus"), sep = "_") %>% 
+    group_by(time) %>%
+    mutate(pop = sum(Value)) %>%
+    ungroup() %>% 
+    group_by(Serostatus, Type, time, pop) %>% 
+    summarise(.groups = "keep", Value = sum(Value)) %>% 
+    mutate(Prop = Value/pop) %>%
+    ungroup() %>% 
+    rename(Group = Serostatus) %>%
+    mutate(Group = as.numeric(Group)+1) %>%
+    select(time, Prop, Type, Group) %>%
+    inner_join(data %>% select(time = Age_con,Group, Type), by = c("time","Type", "Group")) %>% 
+    arrange(time, Type, Group)
+  
+  ll <- -sum(dnorm(x=data$sero_prop,mean=df_out$Prop,sd=sigma,log=TRUE))
+  
+  ll = if_else(is.na(ll) | is.infinite(ll), 10^6, ll)
+  
+  return(ll)
+}
+```
+
+
+
+## Individual variation
+#### 5 strain
+```{r}
+
+loglik5_variation <- function(rho_m, 
+                              rho,
+                   l54, 
+                   l43, l32,
+                   l21, l10, 
+                   b0, b1,
+                   b2,b3, sigma){
+  
+  paras <- c(rho_m = rho_m, w1 = 1,
+            w2 = 1, w3 = 1,
+            w4 = 1, rho_5 = rho, 
+            l54 = l54, 
+            l43 = l43,
+            l32 = l32,
+            l21 = l21,
+            l10 = l10,
+            b0 = b0, b1 = b1, 
+            b2 = b2, b3 = b3,
+            sigma = sigma)
+  # print(pars)
+  
+  times <- seq(t_start,70, by = 0.125) #by = .125)
+
+  serocatalytic_model_out <- ode(y = init, times = times, func = ODE_fun, parms = paras) %>% as.data.frame()
+  
+  ## double check the population math 
+  df_out <- serocatalytic_model_out %>%
+    pivot_longer(-time, names_to = "State", values_to = "Value") %>% 
+    separate(State, into = c("Type", "Serostatus"), sep = "_") %>% 
+    group_by(time) %>%
+    mutate(pop = sum(Value)) %>%
+    ungroup() %>% 
+    group_by(Serostatus, Type, time, pop) %>% 
+    summarise(.groups = "keep", Value = sum(Value)) %>% 
+    mutate(Prop = Value/pop) %>%
+    ungroup() %>% 
+    rename(Group = Serostatus) %>%
+    mutate(Group = as.numeric(Group)+1) %>%
+    select(time, Prop, Type, Group) %>%
+    inner_join(data %>% select(time = Age_con,Group, Type), by = c("time","Type", "Group")) %>% 
+    arrange(time, Type, Group)
+  
+  ll <- -sum(dnorm(x=data$sero_prop,mean=df_out$Prop,sd=sigma,log=TRUE))
+  ll = if_else(is.na(ll) | is.infinite(ll), 10^6, ll)
+
+  return(ll)
+}
+```
+
+#### 4 strain
+```{r}
+
+loglik4_variation <- function(rho_m, 
+                  rho,
+                   l43, l32,
+                   l21, l10, 
+                   b0, b1,
+                   b2,
+                   sigma){
+  
+  paras <- c(rho_m = rho_m, w1 = 1,
+            w2 = 1, w3 = 1,
+            rho_4 = rho, 
+            l43 = l43, l32 = l32,
+            l21 = l21, l10 = l10, 
+            b0 = b0, b1 = b1,
+            b2 = b2,
+            sigma = sigma)
+  # print(pars)
+  
+  times <- seq(t_start,70, by = 0.125) #by = .125)
+
+  serocatalytic_model_out <- ode(y = init, times = times, func = ODE_fun, parms = paras) %>% as.data.frame()
+  
+  ## double check the population math 
+  df_out <- serocatalytic_model_out %>%
+    pivot_longer(-time, names_to = "State", values_to = "Value") %>% 
+    separate(State, into = c("Type", "Serostatus"), sep = "_") %>% 
+    group_by(time) %>%
+    mutate(pop = sum(Value)) %>%
+    ungroup() %>% 
+    group_by(Serostatus, Type, time, pop) %>% 
+    summarise(.groups = "keep", Value = sum(Value)) %>% 
+    mutate(Prop = Value/pop) %>%
+    ungroup() %>% 
+    rename(Group = Serostatus) %>%
+    mutate(Group = as.numeric(Group)+1) %>%
+    select(time, Prop, Type, Group) %>%
+    inner_join(data %>% select(time = Age_con,Group, Type), by = c("time","Type", "Group")) %>% 
+    arrange(time, Type, Group)
+  
+  ll <- -sum(dnorm(x=data$sero_prop,mean=df_out$Prop,sd=sigma,log=TRUE))
+  ll = if_else(is.na(ll) | is.infinite(ll), 10^6, ll)
+
+  return(ll)
+}
+```
+
+
+## Binary model
+```{r}
+loglik2 <- function(rho_m,
+                    rho,
+                   lambda_0, sigma){
+
+  paras <- c(rho_m = rho_m,
+             rho_1 = rho, 
+            lambda_0 = lambda_0, 
+            sigma = sigma)
+  #print(paras)
+  
+  times <- seq(t_start,70, by = 0.125) #by = .125)
+
+  serocatalytic_model_out <- ode(y = init, times = times, func = ODE_fun, parms = paras) %>% as.data.frame()
+  
+  ## double check the population math 
+  df_out <- serocatalytic_model_out %>%
+    pivot_longer(-time, names_to = "State", values_to = "Value") %>% 
+    separate(State, into = c("Type", "Serostatus"), sep = "_") %>% 
+    group_by(time) %>%
+    mutate(pop = sum(Value)) %>%
+    ungroup() %>% 
+    group_by(Serostatus, Type, time, pop) %>% 
+    summarise(.groups = "keep", Value = sum(Value)) %>%
+    mutate(Prop = Value/pop) %>%
+    ungroup() %>% 
+    rename(Group = Serostatus) %>%
+    mutate(Group = as.numeric(Group) + 1) %>%
+    select(time, Prop, Type, Group) %>%
+   inner_join(data %>% 
+               select(time = Age_con, Group, Type, sero_prop), 
+             by = c("time", "Type", "Group")) %>% 
+    arrange(time, Type, Group) 
+  
+  ll <- -sum(dnorm(x=df_out$sero_prop,mean=df_out$Prop,sd=sigma,log=TRUE))
+  ll = if_else(is.na(ll) | is.infinite(ll), 10^6, ll)
+  
+  return(ll)
+}
+```
+
+
+<!-- # Pull sero data -->
+<!-- ```{r} -->
+
+<!-- data_all <- read_csv("../data/data_hypotheses/gmm_out/data_all.csv") -->
+
+<!-- sero_A <- data_all %>% filter(strain == "HKU1_S1") %>% arrange(Age_con, Type, Group) -->
+<!-- sero_B <- data_all %>% filter(strain == "OC43_HE") %>% arrange(Age_con, Type, Group) -->
+<!-- sero_C <- data_all %>% filter(strain == "NL63_S1") %>% arrange(Age_con, Type, Group) -->
+<!-- sero_D <- data_all %>% filter(strain == "a_229E_S1") %>% arrange(Age_con, Type, Group) -->
+<!-- ``` -->
+
+# Generate simulated data
+## function - Run fitting
+```{r}
+
+## Strain: OC43_HE, HKU1_S1, a_229E_S1, NL63_S1
+## Exposure: Ordered, Variation, Binary
+## Choose Rho: rho_05, rho_95
+## Waning: Direct, Laddered
+
+fit_hypotheses <- function(strain_type, exposure, choose_rho, waning){
+  ## grab waning parameter
+  if (choose_rho == "rho_05"){
+    rho_val = rho_05
+  } else{
+    rho_val = rho_95
+  }
+  
+  ## assign models and data 
+  if (exposure == "Binary"){
+    data <- read_csv("../data/data_hypotheses/gmm_out/data_all2.csv") %>% filter(strain == strain_type) %>% arrange(Age_con, Type, Group)
+    likelihood_function <- loglik2
+    par_names <- c("rho_m", "lambda_0", "sigma")
+    ## set boundary conditions
+    start = list(rho_m = 1, lambda_0 = 1, sigma = 0.2)
+    upper_vec = list(rho_m = 365, lambda_0 = 12, sigma = 5)
+    lower_vec = list(rho_m = 0, lambda_0 = 1/80, sigma = 0.001)
+    ODE_fun <- serocatalytic_2_model
+  } else{
+    data <- read_csv("../data/data_hypotheses/gmm_out/data_all.csv") %>% filter(strain == strain_type) %>% arrange(Age_con, Type, Group)
+    if (exposure == "Ordered" & strain_type == "HKU1_S1"){
+      likelihood_function <- loglik5_ordered ## choose likelihood function
+      par_names <- c("rho_m", "b0", "b1", "b2", "b3", "lambda_4", "sigma")
+      ## set boundary conditions
+        start = list(rho_m = 1, b0 = 1, b1 = 1, b2 = 1, b3 = 1, lambda_4 = 1, sigma = 0.2)
+        upper_vec= list(rho_m = 365, b0 = 8000,b1 = 8000, b2 = 8000, b3 = 8000, lambda_4 = 12, sigma = 5)
+        lower_vec = list(rho_m = 0, b0 = 1,b1 = 1, b2 = 1, b3 = 1, lambda_4 = 1/80, sigma = 0.001)
+        
+      ## set waning type
+      if (waning != "Direct"){
+        ODE_fun <- ordered_infection_model_5 ## choose serocatalytic model for waning hypothesis
+      } else {
+        ODE_fun <- ordered_infection_waning_model_5 ## choose serocatalytic model for waning hypothesis
+      }
+    } else if (exposure == "Ordered" & strain_type != "HKU1_S1"){
+      likelihood_function <- loglik4_ordered
+      par_names <- c("rho_m", "b0", "b1", "b2", "lambda_3", "sigma")
+        ## set boundary conditions
+        start = list(rho_m = 1, b0 = 1, b1 = 1, b2 = 1, lambda_3 = 1, sigma = 0.2)
+        upper_vec= list(rho_m = 365, b0 = 8000,b1 = 8000, b2 = 8000, lambda_3 = 12, sigma = 5)
+        lower_vec = list(rho_m = 0, b0 = 1,b1 = 1, b2 = 1, lambda_3 = 1/80, sigma = 0.001)
+      ## set waning type
+      if (waning != "Direct"){
+        ODE_fun <- ordered_infection_model_4
+            } else {
+        ODE_fun <- ordered_infection_waning_model_4
+                  }
+    } else if (exposure == "Variation" & strain_type == "HKU1_S1"){
+      likelihood_function <- loglik5_variation
+      par_names <- c("rho_m", "l54", "l43", "l32", "l21", "l10", "b0", "b1", "b2", "b3", "sigma")
+      ## set boundary conditions
+      start = list(rho_m = 1, l54 = 1, l43 = 1, l32 = 1, l21 = 1, l10 = 1, 
+             b0 = 1, b1 = 1, b2 = 1, b3 = 1, sigma = 0.2)
+      upper_vec= list(rho_m = 365, l54 = 12, l43 = 12, l32 = 12, l21 = 12, l10 = 12,
+                        b0 = 8000, b1 = 8000, b2 = 8000, b3 = 8000, sigma = 5)
+      lower_vec = list(rho_m = 0, l54 = 1/80, l43 = 1/80, l32 = 1/80, l21 = 1/80, l10 = 1/80,
+                         b0 = 1, b1 = 1, b2 = 1, b3 = 1, sigma = 0.001)      
+      ## set waning type
+      if (waning != "Direct"){
+              ODE_fun <- variation_infection_model_5
+              } else {
+            ODE_fun <- variation_infection_waning_model_5
+                  }
+    } else if (exposure == "Variation" & strain_type != "HKU1_S1"){
+      likelihood_function <- loglik4_variation
+      par_names <- c("rho_m", "l43", "l32", "l21", "l10", "b0", "b1", "b2", "sigma")
+      ## set boundary conditions
+      start = list(rho_m = 1, l43 = 1, l32 = 1, l21 = 1, l10 = 1, 
+             b0 = 1, b1 = 1, b2 = 1, sigma = 0.2)
+      upper_vec= list(rho_m = 365, l43 = 12, l32 = 12, l21 = 12, l10 = 12,
+                        b0 = 8000, b1 = 8000, b2 = 8000, sigma = 5)
+      lower_vec = list(rho_m = 0, l43 = 1/80, l32 = 1/80, l21 = 1/80, l10 = 1/80,
+                         b0 = 1, b1 = 1, b2 = 1, b3 = 1, sigma = 0.001)      
+      ## set waning type
+      if (waning != "Direct"){
+             ODE_fun <- variation_infection_model_4
+              } else {
+            ODE_fun <- variation_infection_waning_model_4
+                  }
+    }
+  }
+  
+## initial conditions
+data_start <- data %>% filter(Age_con == 0)
+
+if (exposure == "Binary"){
+  init <- c(P_0 = data_start$sero_prop[data_start$Group == 1], 
+          M_1 = data_start$sero_prop[data_start$Group == 2], P_1 = 0)
+} else if (exposure != "Binary" & strain_type != "HKU1_S1"){
+init <- c(P_0 = data_start$sero_prop[data_start$Group == 1], 
+          M_1 = data_start$sero_prop[data_start$Group == 2], P_1 = 0,
+          M_2 = data_start$sero_prop[data_start$Group == 3], P_2 = 0,
+          M_3 = data_start$sero_prop[data_start$Group == 4], P_3 = 0,
+          M_4 = data_start$sero_prop[data_start$Group == 5], P_4 = 0)
+          } else{
+  init <- c(P_0 = data_start$sero_prop[data_start$Group == 1], 
+          M_1 = data_start$sero_prop[data_start$Group == 2], P_1 = 0,
+          M_2 = data_start$sero_prop[data_start$Group == 3], P_2 = 0,
+          M_3 = data_start$sero_prop[data_start$Group == 4], P_3 = 0,
+          M_4 = data_start$sero_prop[data_start$Group == 5], P_4 = 0,
+          M_5 = data_start$sero_prop[data_start$Group == 6], P_5 = 0
+          )
+}
+
+
+## Globalize anything that the log likelihood needs directly. Loglik can only have inputs that are getting acted on by MLE. And this is a new function environment. So there is not a great way to get these variables to be taken in by loglik
+assign("ODE_fun", ODE_fun, envir = .GlobalEnv)
+assign("init", init, envir = .GlobalEnv)
+assign("data", data, envir = .GlobalEnv)
+#assign("par_names", start, envir = .GlobalEnv)
+
+
+## Run maximum likelihood
+m1_out = mle2(minuslogl = likelihood_function,
+            start = start,
+            data = data,
+            method="L-BFGS-B",
+            upper= upper_vec,
+            lower = lower_vec,
+            fixed = list(rho = as.numeric(rho_val)),
+            control=list(maxit=1000, trace=TRUE, parscale=abs(unlist(start)))
+)
+
+full <- summary(m1_out)
+dt <- data.table::as.data.table(coef(full), .keep.rownames = "word")
+
+AIC_value <- AIC(m1_out)
+
+dt <- dt %>% mutate(
+  paras = par_names,
+  AIC = AIC_value,
+  loglik = -m1_out@min,
+  strain = strain_type, 
+  exposure_hypothesis = exposure,
+  rho = choose_rho,
+  waning = waning
+  )
+
+
+return(dt)
+
+}
+
+```
+
+## function - get output
+```{r}
+get_sim_output <- function(strain_type, exposure, choose_rho, waning, get_fit){
+  
+  ## grab waning parameter
+  if (choose_rho == "rho_05"){
+    rho_val = rho_05
+  } else{
+    rho_val = rho_95
+  }
+  
+  ## assign models and data 
+  if (exposure == "Binary"){
+    data <- read_csv("../data/data_hypotheses/gmm_out/data_all2.csv") %>% filter(strain == strain_type) %>% arrange(Age_con, Type, Group)
+    par_names <- c("rho_m", "lambda_0", "sigma")
+    ODE_fun <- serocatalytic_2_model
+  } else{
+    data <- read_csv("../data/data_hypotheses/gmm_out/data_all.csv") %>% filter(strain == strain_type) %>% arrange(Age_con, Type, Group)
+    if (exposure == "Ordered" & strain_type == "HKU1_S1"){
+      par_names <- c("rho_m", "b0", "b1", "b2", "b3", "lambda_4", "sigma")
+      ## set waning type
+      if (waning != "Direct"){
+        ODE_fun <- ordered_infection_model_5 ## choose serocatalytic model for waning hypothesis
+      } else {
+        ODE_fun <- ordered_infection_waning_model_5 ## choose serocatalytic model for waning hypothesis
+      }
+    } else if (exposure == "Ordered" & strain_type != "HKU1_S1"){
+      par_names <- c("rho_m", "b0", "b1", "b2", "lambda_3", "sigma")
+      ## set waning type
+      if (waning != "Direct"){
+        ODE_fun <- ordered_infection_model_4
+            } else {
+        ODE_fun <- ordered_infection_waning_model_4
+                  }
+    } else if (exposure == "Variation" & strain_type == "HKU1_S1"){
+      par_names <- c("rho_m", "l54", "l43", "l32", "l21", "l10", "b0", "b1", "b2", "b3", "sigma")
+      ## set waning type
+      if (waning != "Direct"){
+              ODE_fun <- variation_infection_model_5
+              } else {
+            ODE_fun <- variation_infection_waning_model_5
+                  }
+    } else if (exposure == "Variation" & strain_type != "HKU1_S1"){
+      par_names <- c("rho_m", "l43", "l32", "l21", "l10", "b0", "b1", "b2", "sigma")
+      ## set waning type
+      if (waning != "Direct"){
+             ODE_fun <- variation_infection_model_4
+              } else {
+            ODE_fun <- variation_infection_waning_model_4
+                  }
+    }
+  }
+  
+## initial conditions
+data_start <- data %>% filter(Age_con == 0)
+
+if (exposure == "Binary"){
+init <- c(P_0 = data_start$sero_prop[data_start$Group == 1], 
+          M_1 = data_start$sero_prop[data_start$Group == 2], P_1 = 0)
+} else if (exposure != "Binary" & strain_type != "HKU1_S1"){
+init <- c(P_0 = data_start$sero_prop[data_start$Group == 1], 
+          M_1 = data_start$sero_prop[data_start$Group == 2], P_1 = 0,
+          M_2 = data_start$sero_prop[data_start$Group == 3], P_2 = 0,
+          M_3 = data_start$sero_prop[data_start$Group == 4], P_3 = 0,
+          M_4 = data_start$sero_prop[data_start$Group == 5], P_4 = 0)
+          } else{
+  init <- c(P_0 = data_start$sero_prop[data_start$Group == 1], 
+          M_1 = data_start$sero_prop[data_start$Group == 2], P_1 = 0,
+          M_2 = data_start$sero_prop[data_start$Group == 3], P_2 = 0,
+          M_3 = data_start$sero_prop[data_start$Group == 4], P_3 = 0,
+          M_4 = data_start$sero_prop[data_start$Group == 5], P_4 = 0,
+          M_5 = data_start$sero_prop[data_start$Group == 6], P_5 = 0
+          )
+}
+
+
+  ## get coeffs for running the simulation
+  coeff <- get_fit %>% select(paras, Estimate) %>% 
+    pivot_wider(names_from = paras, values_from = Estimate) %>% 
+    as.vector()
+  
+  if (exposure == "Binary"){
+    paras <- c(
+      rho_m = coeff$rho_m,
+      rho_1 = as.numeric(rho_val),
+      lambda_0 = coeff$lambda_0
+    )} else if (exposure == "Ordered" & strain_type == "HKU1_S1"){
+    paras <- c(rho_m = coeff$rho_m, 
+               w1 = 1,
+               w2 = 1,
+               w3 = 1,
+               w4 = 1,
+               rho_5 = as.numeric(rho_val),
+               b0 = coeff$b0, 
+               b1 = coeff$b1, 
+               b2 = coeff$b2, 
+               b3 = coeff$b3, 
+               lambda_4 = coeff$lambda_4)
+  } else if (exposure == "Ordered" & strain_type != "HKU1_S1"){
+    paras <- c(rho_m = coeff$rho_m, 
+               w1 = 1,
+               w2 = 1,
+               w3 = 1,
+               rho_4 = as.numeric(rho_val),
+               b0 = coeff$b0, 
+               b1 = coeff$b1, 
+               b2 = coeff$b2, 
+               lambda_3 = coeff$lambda_3)
+  } else if (exposure == "Variation" & strain_type == "HKU1_S1"){
+    paras = c(rho_m = coeff$rho_m, 
+              w1 = 1,
+              w2 = 1,
+              w3 = 1,
+              w4 = 1,
+              rho_5 = as.numeric(rho_val),
+              l54 = coeff$l54, 
+              l43 = coeff$l43, 
+              l32 = coeff$l32, 
+              l21 = coeff$l21, 
+              l10 = coeff$l10, 
+              b0 = coeff$b0, 
+              b1 = coeff$b1, 
+              b2 = coeff$b2, 
+              b3 = coeff$b3)
+  } else {
+    paras = c(rho_m = coeff$rho_m, 
+              w1 = 1,
+              w2 = 1,
+              w3 = 1,
+              rho_4 = as.numeric(rho_val),
+              l43 = coeff$l43, 
+              l32 = coeff$l32, 
+              l21 = coeff$l21, 
+              l10 = coeff$l10, 
+              b0 = coeff$b0, 
+              b1 = coeff$b1, 
+              b2 = coeff$b2)
+  }
+  
+  
+  # print(pars)
+  
+  times <- seq(0,70, by = 0.125) #by = .125)
+  
+  serocatalytic_model_out <- ode(y = init, times = times, func = ODE_fun, parms = paras) %>% as.data.frame()
+  
+  ## double check the population math 
+  df_out <- serocatalytic_model_out %>%
+    pivot_longer(-time, names_to = "State", values_to = "Value") %>% 
+    separate(State, into = c("Type", "Serostatus"), sep = "_") %>% 
+    group_by(time) %>%
+    mutate(pop = sum(Value)) %>%
+    ungroup() %>% 
+    group_by(Serostatus, Type, time, pop) %>% 
+    summarise(.groups = "keep", Value = sum(Value)) %>% 
+    mutate(Prop = Value/pop) %>%
+    ungroup() %>% 
+    rename(Group = Serostatus) %>%
+    mutate(Group = as.numeric(Group)+1) %>%
+    select(time, Prop, Type, Group) %>%
+    inner_join(data %>% select(time = Age_con,Group, Type), by = c("time","Type", "Group")) %>%
+    arrange(time, Type, Group)
+  
+  
+  return(df_out)
+  
+}
+```
+
+## Run for loop 
+```{r}
+
+multi_grid_scenarios <- expand_grid(strain_type = c("HKU1_S1", "a_229E_S1", "NL63_S1", "OC43_HE"),
+                              exposure = c("Ordered", "Variation"),
+                              choose_rho = c("rho_05", "rho_95"),
+                              waning = c("Direct", "Laddered")
+                              )
+binary_grid_scenarios <- expand_grid(strain_type = c("HKU1_S1", "a_229E_S1", "NL63_S1", "OC43_HE"),
+                              exposure = c("Binary"),
+                              choose_rho = c("rho_05", "rho_95"),
+                              waning = c("Direct")
+                              )
+full_grid <- rbind(multi_grid_scenarios, binary_grid_scenarios) %>%
+  arrange(exposure, choose_rho)
+
+return_fits <- NULL
+return_simulations <- NULL
+
+for (i in 1:nrow(full_grid)){
+  t_start = 0
+  
+  print(c(strain_type = full_grid$strain_type[i],
+                            exposure = full_grid$exposure[i],
+                            choose_rho = full_grid$choose_rho[i],
+                            waning = full_grid$waning[i]))
+  
+  get_fit <- fit_hypotheses(strain_type = full_grid$strain_type[i],
+                            exposure = full_grid$exposure[i],
+                            choose_rho = full_grid$choose_rho[i],
+                            waning = full_grid$waning[i])
+  get_simulation <- get_sim_output(strain_type = full_grid$strain_type[i],
+                                   exposure = full_grid$exposure[i],
+                                   choose_rho = full_grid$choose_rho[i],
+                                   waning = full_grid$waning[i], 
+                                   get_fit = get_fit) %>%
+    mutate(strain_type = full_grid$strain_type[i],
+           exposure = full_grid$exposure[i],
+           choose_rho = full_grid$choose_rho[i],
+           waning = full_grid$waning[i])
+
+  return_fits <- return_fits %>% rbind(get_fit)
+  return_simulations <- return_simulations %>% rbind(get_simulation)
+}
+
+write_csv(return_fits, "../data/data_hypotheses/return_fits.csv")
+write_csv(return_simulations, "../data/data_hypotheses/return_simulations.csv")
+
+```
+
+
+## Get best fit model 
+```{r}
+
+return_fits <- read_csv("../data/data_hypotheses/return_fits.csv")
+return_simulations <- read_csv("../data/data_hypotheses/return_simulations.csv")
+
+AIC_choose <- return_fits %>% 
+  select(strain, exposure_hypothesis, AIC, rho, waning) %>%
+  group_by(strain, exposure_hypothesis) %>%
+  filter(AIC == min(AIC)) %>%
+  distinct() %>%
+  ungroup()
+
+AIC_get_paras_grid_plot <- AIC_choose %>%
+  select(-AIC) %>%
+  inner_join(return_fits, by = c("strain", "exposure_hypothesis", "waning", "rho")) %>%
+  filter(exposure_hypothesis != "Binary") %>%
+  group_by(strain) %>%
+  filter(AIC == min(AIC)) %>%
+  ungroup() %>%
+  select(strain, paras, value = Estimate) %>%
+  pivot_wider(names_from = "paras", values_from = "value") %>%
+  mutate(l53 = b3*l54,
+         l52 = b2*l53,
+         l51 = b1*l52,
+         l50 = b0*l51,
+         l42 = b2*l43,
+         l41 = b1*l42,
+         l40 = b0*l41,
+         l31 = b1*l32,
+         l30 = b0*l31,
+         l20 = b0*l21
+         ) %>%
+  select(-b0, -b1, -b2, -b3, -sigma, -rho_m) %>%
+  pivot_longer(`l54`:`l20`) %>%
+  mutate(name = fct_relevel(name, c("l10", "l20", "l30", "l40", "l50", "l21", "l31", "l41", "l51", "l32", "l42", "l52", "l43", "l53", "l54"))) %>%
+  mutate(strain = fct_relevel(strain, c("HKU1_S1", "OC43_HE", "NL63_S1", "a_229E_S1"))) %>%
+  ggplot() +
+  geom_tile(aes(y = strain, x = name, fill = log(1/value))) + 
+  scale_fill_continuous(low = "darkblue", high = "#ffe8d5",guide="colorbar",na.value="transparent")
+AIC_get_paras_grid_plot
+
+```
+
+
+## function - get trajectory (binary)
+```{r}
+get_binary_trajectory <- function(strain_type, choose_rho, reps, get_fit){
+  ## grab waning parameter
+  if (choose_rho == "rho_05"){
+    rho_val = rho_05
+  } else {
+    rho_val = rho_95
+  }
+  
+  ## get data, pars
+  data <- read_csv("../data/data_hypotheses/gmm_out/data_all2.csv") %>% filter(strain == strain_type) %>% arrange(Age_con, Type, Group)
+  par_names <- c("rho_m", "lambda_0", "sigma")
+  
+  ## init
+  data_start <- data %>% filter(Age_con == 0)
+  init <- c(M_1 = data_start$sero_prop[data_start$Group == 2], P_0 = data_start$sero_prop[data_start$Group == 1], P_1 = 0)
+  
+  reps_out <- NULL
+  
+  print(strain_type)
+
+  for (k in 1:reps){
+  
+  ## weighted coin flip to assign the initial state of the individual
+  ladder_prop <- NULL
+      for (j in 1:length(init)){
+        propi <- sum(init[1:j])/sum(init)
+        ladder_prop <- c(ladder_prop, propi)
+      }
+      ## choose state
+      prob <- runif(1)
+      if (prob < ladder_prop[1]){
+        serostatus = 1
+        state <- c(m1 = 1, p1 = 0, p0 = 0) ## careful that state vector ordering matches order of params for multiplication
+      } else if (prob >= ladder_prop[1] & prob < ladder_prop[2]){
+        serostatus = 0
+        state <- c(m1 = 0, p1 = 0, p0 = 1)
+      }
+      
+  ## get coeffs for running the simulation, depending on the model type
+      ## a229E not working?
+  coeff <- get_fit %>%
+      filter(exposure_hypothesis == "Binary", waning == "Direct", rho == "rho_95", strain == strain_type) %>%
+      select(paras, Estimate) %>%
+      pivot_wider(names_from = "paras", values_from = "Estimate")
+  
+  paras <- c(rho_m = coeff$rho_m,
+      rho_1 = as.numeric(rho_val),
+      lambda_0 = coeff$lambda_0)
+    
+  t = 0
+  trajectory <- NULL
+  trajectory <- trajectory %>% rbind(tibble(time = t, status = serostatus))
+  
+  while (t < 70){
+    ## get rates based on where the person is
+    rate_vec <- paras*state
+    ## get sum of rates
+    rate_sum = sum(rate_vec)
+    ## get time step
+    ## NB! In rexp, the lambda parameter is the INVERSE of the mean. In this case, we want mean 1/rate_sum, so we feed it rate_sum directly
+    time_step = rexp(1, rate_sum)
+    # draw a random number and use it to choose the probability
+    prob <- runif(1)
+  
+    ladder_prop <- NULL
+    for (i in 1:length(rate_vec)){
+      propi <- sum(rate_vec[1:i])/rate_sum
+      ladder_prop <- c(ladder_prop, propi)
+    }
+    ## choose event
+    if (prob < ladder_prop[1]){
+      ## maternal revert
+      serostatus = 0
+      state <- c(m1 = 0, p1 = 0, p0 = 1)
+    } else if(prob >= ladder_prop[1] & prob < ladder_prop[2]){
+      ## p1 revert to p0
+      serostatus = 0
+      state <- c(m1 = 0, p1 = 0, p0 = 1)
+    } else{
+      ## p0 convert to p1
+      serostatus = 1
+      state <- c(m1 = 0, p1 = 1, p0 = 0)
+    }
+    t = t + time_step
+    trajectory <- trajectory %>% rbind(tibble(time = t, status = serostatus))
+    }
+  
+  reps_out <- reps_out %>% rbind(trajectory %>% mutate(ID = k))
+  
+  }
+  
+  return(reps_out)
+}
+
+```
+
+## function - get trajectory (variation, laddered)
+
+```{r}
+
+get_variation_trajectory <- function(strain_type, choose_rho, waning, reps, get_fit){
+  
+  ## set state vectors
+  ## one copy of compartment per corresponding parameter, do not change order of params without changing order of states
+  state_P0 <-  c(m1 = 0, m2 = 0, m3 = 0, m4 = 0, m5 = 0, 
+                 p1 = 0, p2 = 0, p3 = 0, p4 = 0, p5 = 0,
+                 p0 = 1,
+                 p1 = 0, p0 = 1,
+                 p2 = 0, p1 = 0, p0 = 1,
+                 p3 = 0, p2 = 0, p1 = 0, p0 = 1,
+                 p4 = 0, p3 = 0, p2 = 0, p1 = 0, p0 = 1)
+  state_P1 <-  c(m1 = 0, m2 = 0, m3 = 0, m4 = 0, m5 = 0, 
+                 p1 = 1, p2 = 0, p3 = 0, p4 = 0, p5 = 0,
+                 p0 = 0,
+                 p1 = 1, p0 = 0,
+                 p2 = 0, p1 = 1, p0 = 0,
+                 p3 = 0, p2 = 0, p1 = 1, p0 = 0,
+                 p4 = 0, p3 = 0, p2 = 0, p1 = 1, p0 = 0)
+  state_P2 <-  c(m1 = 0, m2 = 0, m3 = 0, m4 = 0, m5 = 0, 
+                 p1 = 0, p2 = 1, p3 = 0, p4 = 0, p5 = 0,
+                 p0 = 0,
+                 p1 = 0, p0 = 0,
+                 p2 = 1, p1 = 0, p0 = 0,
+                 p3 = 0, p2 = 1, p1 = 0, p0 = 0,
+                 p4 = 0, p3 = 0, p2 = 1, p1 = 0, p0 = 0)
+  state_P3 <-  c(m1 = 0, m2 = 0, m3 = 0, m4 = 0, m5 = 0, 
+                 p1 = 0, p2 = 0, p3 = 1, p4 = 0, p5 = 0,
+                 p0 = 0,
+                 p1 = 0, p0 = 0,
+                 p2 = 0, p1 = 0, p0 = 0,
+                 p3 = 1, p2 = 0, p1 = 0, p0 = 0,
+                 p4 = 0, p3 = 1, p2 = 0, p1 = 0, p0 = 0)
+  state_P4 <-  c(m1 = 0, m2 = 0, m3 = 0, m4 = 0, m5 = 0, 
+                 p1 = 0, p2 = 0, p3 = 0, p4 = 1, p5 = 0,
+                 p0 = 0,
+                 p1 = 0, p0 = 0,
+                 p2 = 0, p1 = 0, p0 = 0,
+                 p3 = 0, p2 = 0, p1 = 0, p0 = 0,
+                 p4 = 1, p3 = 0, p2 = 0, p1 = 0, p0 = 0)  
+  state_P5 <-  c(m1 = 0, m2 = 0, m3 = 0, m4 = 0, m5 = 0, 
+                 p1 = 0, p2 = 0, p3 = 0, p4 = 0, p5 = 1,
+                 p0 = 0,
+                 p1 = 0, p0 = 0,
+                 p2 = 0, p1 = 0, p0 = 0,
+                 p3 = 0, p2 = 0, p1 = 0, p0 = 0,
+                 p4 = 0, p3 = 0, p2 = 0, p1 = 0, p0 = 0)    
+  state_M1 <-  c(m1 = 1, m2 = 0, m3 = 0, m4 = 0, m5 = 0, 
+                 p1 = 0, p2 = 0, p3 = 0, p4 = 0, p5 = 0,
+                 p0 = 0,
+                 p1 = 0, p0 = 0,
+                 p2 = 0, p1 = 0, p0 = 0,
+                 p3 = 0, p2 = 0, p1 = 0, p0 = 0,
+                 p4 = 0, p3 = 0, p2 = 0, p1 = 0, p0 = 0)    
+  state_M2 <-  c(m1 = 0, m2 = 1, m3 = 0, m4 = 0, m5 = 0, 
+                 p1 = 0, p2 = 0, p3 = 0, p4 = 0, p5 = 0,
+                 p0 = 0,
+                 p1 = 0, p0 = 0,
+                 p2 = 0, p1 = 0, p0 = 0,
+                 p3 = 0, p2 = 0, p1 = 0, p0 = 0,
+                 p4 = 0, p3 = 0, p2 = 0, p1 = 0, p0 = 0)      
+  state_M3 <-  c(m1 = 0, m2 = 0, m3 = 1, m4 = 0, m5 = 0, 
+                 p1 = 0, p2 = 0, p3 = 0, p4 = 0, p5 = 0,
+                 p0 = 0,
+                 p1 = 0, p0 = 0,
+                 p2 = 0, p1 = 0, p0 = 0,
+                 p3 = 0, p2 = 0, p1 = 0, p0 = 0,
+                 p4 = 0, p3 = 0, p2 = 0, p1 = 0, p0 = 0)    
+  state_M4 <-  c(m1 = 0, m2 = 0, m3 = 0, m4 = 1, m5 = 0, 
+                 p1 = 0, p2 = 0, p3 = 0, p4 = 0, p5 = 0,
+                 p0 = 0,
+                 p1 = 0, p0 = 0,
+                 p2 = 0, p1 = 0, p0 = 0,
+                 p3 = 0, p2 = 0, p1 = 0, p0 = 0,
+                 p4 = 0, p3 = 0, p2 = 0, p1 = 0, p0 = 0)   
+  state_M5 <-  c(m1 = 0, m2 = 0, m3 = 0, m4 = 0, m5 = 1, 
+                 p1 = 0, p2 = 0, p3 = 0, p4 = 0, p5 = 0,
+                 p0 = 0,
+                 p1 = 0, p0 = 0,
+                 p2 = 0, p1 = 0, p0 = 0,
+                 p3 = 0, p2 = 0, p1 = 0, p0 = 0,
+                 p4 = 0, p3 = 0, p2 = 0, p1 = 0, p0 = 0)   
+  
+  ## grab waning parameter
+  if (choose_rho == "rho_05"){
+    rho_val = rho_05
+  } else{
+    rho_val = rho_95
+  }
+  
+  ## get data, pars
+    data <- read_csv("../data/data_hypotheses/gmm_out/data_all.csv") %>% filter(strain == strain_type) %>% arrange(Age_con, Type, Group)
+    data_start <- data %>% filter(Age_con == 0)
+    
+    if (strain_type == "HKU1_S1"){
+      par_names <- c("rho_m", "l54", "l43", "l32", "l21", "l10", "b0", "b1", "b2", "b3", "sigma")
+    } else if (strain_type != "HKU1_S1"){
+      par_names <- c("rho_m", "l43", "l32", "l21", "l10", "b0", "b1", "b2", "sigma")
+    }
+    
+  ## init
+    if (strain_type != "HKU1_S1"){
+    init <- c(P_0 = data_start$sero_prop[data_start$Group == 1], 
+          M_1 = data_start$sero_prop[data_start$Group == 2], P_1 = 0,
+          M_2 = data_start$sero_prop[data_start$Group == 3], P_2 = 0,
+          M_3 = data_start$sero_prop[data_start$Group == 4], P_3 = 0,
+          M_4 = data_start$sero_prop[data_start$Group == 5], P_4 = 0)
+          } else{
+      init <- c(P_0 = data_start$sero_prop[data_start$Group == 1], 
+          M_1 = data_start$sero_prop[data_start$Group == 2], P_1 = 0,
+          M_2 = data_start$sero_prop[data_start$Group == 3], P_2 = 0,
+          M_3 = data_start$sero_prop[data_start$Group == 4], P_3 = 0,
+          M_4 = data_start$sero_prop[data_start$Group == 5], P_4 = 0,
+          M_5 = data_start$sero_prop[data_start$Group == 6], P_5 = 0
+          )
+  }
+    
+  ## start simulations
+  reps_out <- NULL
+  
+  for (k in 1:reps){
+  
+  ## weighted coin flip to assign the initial state of the individual
+    if (strain_type != "HKU1_S1"){
+      ladder_prop <- NULL
+      for (j in 1:length(init)){
+        propi <- sum(init[1:j])/sum(init)
+        ladder_prop <- c(ladder_prop, propi)
+      }
+      ## choose state
+      prob <- runif(1)
+      if (prob < ladder_prop[1]){
+        serostatus = 0
+        state <- state_P0
+      } else if (prob >= ladder_prop[1] & prob < ladder_prop[2]){
+        serostatus = 1
+        state <- state_M1    
+      } else if (prob >= ladder_prop[3] & prob < ladder_prop[4]){
+        serostatus = 2
+        state <- state_M2
+      } else if (prob >= ladder_prop[5] & prob < ladder_prop[6]){
+        serostatus = 3
+        state <- state_M3
+      } else if (prob >= ladder_prop[7] & prob < ladder_prop[8]){
+        serostatus = 4
+        state <- state_M4
+      }
+    } else{
+      ladder_prop <- NULL
+      for (j in 1:length(init)){
+        propi <- sum(init[1:j])/sum(init)
+        ladder_prop <- c(ladder_prop, propi)
+      }
+      ## choose state
+      prob <- runif(1)
+      if (prob < ladder_prop[1]){
+        serostatus = 0
+        state <- state_P0
+      } else if (prob >= ladder_prop[1] & prob < ladder_prop[2]){
+        serostatus = 1
+        state <- state_M1     
+      } else if (prob >= ladder_prop[3] & prob < ladder_prop[4]){
+        serostatus = 2
+        state <- state_M2
+      } else if (prob >= ladder_prop[5] & prob < ladder_prop[6]){
+        serostatus = 3
+        state <- state_M3 
+      } else if (prob >= ladder_prop[7] & prob < ladder_prop[8]){
+        serostatus = 4
+        state <- state_M4 
+      } else if (prob >= ladder_prop[9] & prob < ladder_prop[10]){
+        serostatus = 5
+        state <- state_M5 
+      }
+    }
+    
+    coeff <- get_fit %>%
+      filter(strain == strain_type, exposure_hypothesis == "Variation", waning == "Laddered", rho == "rho_95") %>%
+      select(paras, Estimate) %>%
+      pivot_wider(names_from = "paras", values_from = "Estimate")
+    
+  ## get coeffs for running the simulation, depending on the model type
+  if (strain_type == "HKU1_S1"){
+    paras <- c(rho_m = coeff$rho_m, rho_m = coeff$rho_m, rho_m = coeff$rho_m, rho_m = coeff$rho_m, rho_m = coeff$rho_m,
+               rho_1 = as.numeric(rho_val), rho_2 = as.numeric(rho_val), rho_3 = as.numeric(rho_val), rho_4 = as.numeric(rho_val), rho_5 = as.numeric(rho_val),
+               l10 = coeff$l10,
+               l21 = coeff$l21, l20 = coeff$l21*coeff$b0,
+               l32 = coeff$l32, l31 = coeff$l32*coeff$b1, l30 = coeff$l32*coeff$b1*coeff$b0,
+               l43 = coeff$l43, l42 = coeff$l43*coeff$b2, l41 = coeff$l43*coeff$b2*coeff$b1, l40 = coeff$l43*coeff$b2*coeff$b1*coeff$b0, 
+               l54 = coeff$l54, l53 = coeff$l54*coeff$b3, l52 = coeff$l54*coeff$b3*coeff$b2, l51 = coeff$l54*coeff$b3*coeff$b2*coeff$b1, l50 = coeff$l54*coeff$b3*coeff$b2*coeff$b1*coeff$b0)
+  } else if (strain_type != "HKU1_S1"){
+    paras <- c(rho_m = coeff$rho_m, rho_m = coeff$rho_m, rho_m = coeff$rho_m, rho_m = coeff$rho_m, rho_m = 0,
+               rho_1 = as.numeric(rho_val), rho_2 = as.numeric(rho_val), rho_3 = as.numeric(rho_val), rho_4 = as.numeric(rho_val), rho_5 = 0,
+               l10 = coeff$l10,
+               l21 = coeff$l21, l20 = coeff$l21*coeff$b0,
+               l32 = coeff$l32, l31 = coeff$l32*coeff$b1, l30 = coeff$l32*coeff$b1*coeff$b0,
+               l43 = coeff$l43, l42 = coeff$l43*coeff$b2, l41 = coeff$l43*coeff$b2*coeff$b1, l40 = coeff$l43*coeff$b2*coeff$b1*coeff$b0, 
+               l54 = 0, l53 = 0, l52 = 0, l51 = 0, l50 = 0)
+  }
+      
+  t = 0
+  trajectory <- NULL
+  trajectory <- trajectory %>% rbind(tibble(time = t, status = serostatus))
+  
+  while (t < 70){
+    ## get rates based on where the person is
+    rate_vec <- paras*state
+    ## get sum of rates
+    rate_sum = sum(rate_vec)
+    ## get timestep
+    # NB! In rexp, the lambda parameter is the rate i.e. INVERSE of the mean. In this case, we want mean 1/rate_sum, so we feed it rate_sum directly
+    time_step = rexp(1, rate_sum)
+    # draw a random number and use it to choose the probability
+    prob <- runif(1)
+    
+    ladder_prop <- NULL
+    for (i in 1:length(rate_vec)){
+      propi <- sum(rate_vec[1:i])/rate_sum
+      ladder_prop <- c(ladder_prop, propi)
+    }
+    ## choose event
+    if (prob < ladder_prop[6]){
+      ## reversion to 0
+      serostatus = 0
+      state <- state_P0
+    } else if(prob >= ladder_prop[6] & prob < ladder_prop[7]){
+      ## p2 revert to p1
+      serostatus = 1
+      state <- state_P1
+    } else if(prob >= ladder_prop[7] & prob < ladder_prop[8]){
+      ## p3 revert to p2
+      serostatus = 2
+      state <- state_P2
+    } else if(prob >= ladder_prop[8] & prob < ladder_prop[9]){
+      ## p4 revert to p3
+      serostatus = 3
+      state <- state_P3
+    } else if(prob >= ladder_prop[9] & prob < ladder_prop[10]){
+      ## p5 revert to p4
+      serostatus = 4
+      state <- state_P4
+    } else if(prob >= ladder_prop[10] & prob < ladder_prop[11]){
+      ## l10 - convert from 0 to 1
+      serostatus = 1
+      state <- state_P1
+    } else if(prob >= ladder_prop[11] & prob < ladder_prop[13]){
+      ## l21, l20 - convert to 2
+      serostatus = 2
+      state <- state_P2
+    } else if(prob >= ladder_prop[13] & prob < ladder_prop[16]){
+      ## l32, l31, l30 - convert to 3
+      serostatus = 3
+      state <- state_P3
+    } else if(prob >= ladder_prop[16] & prob < ladder_prop[20]){
+      ## convert to 4
+      serostatus = 4
+      state <- state_P4
+    } else if(prob >= ladder_prop[20] & prob < ladder_prop[25]){
+      ## convert to 5
+      serostatus = 5
+      state <- state_P5
+    } 
+    
+    t = t + time_step
+    trajectory <- trajectory %>% rbind(tibble(time = t, status = serostatus))
+  }
+    reps_out <- reps_out %>% rbind(trajectory %>% mutate(ID = k))
+  }
+
+  return(reps_out)
+}
+
+```
+
+
+## Trajectories
+```{r}
+return_fits <- read_csv("../data/data_hypotheses/return_fits.csv")
+
+grid_traj <- c("HKU1_S1", "OC43_HE","NL63_S1", "a_229E_S1")
+
+binary_traj_dat <- NULL
+multi_traj_dat <- NULL
+
+
+for (h in 1:length(grid_traj)){
+  dat_h <- get_binary_trajectory(grid_traj[h], "rho_95", 500, return_fits) 
+  dat_h <- dat_h %>% mutate(strain = grid_traj[h])
+  binary_traj_dat <- binary_traj_dat %>% rbind(dat_h)
+  
+}
+
+for (h in 1:length(grid_traj)){
+  dat_h <- get_variation_trajectory(grid_traj[h], "rho_95", "Laddered", 500, return_fits)
+  dat_h <- dat_h %>% mutate(strain = grid_traj[h])
+  multi_traj_dat <- multi_traj_dat %>% rbind(dat_h)
+  
+}
+
+write_csv(binary_traj_dat, "../data/data_hypotheses/binary_trajectories.csv")
+write_csv(multi_traj_dat, "../data/data_hypotheses/variation_trajectories.csv")
+
+
+```
+
+
+# Analyze trajectories
+## Gradient
+```{r}
+multi_traj_dat <- read_csv("../data/data_hypotheses/variation_trajectories.csv") %>%
+  group_by(ID, strain) %>%
+  mutate(zero_check = sum(status == 0)) %>% ## this gives us the number of times they pinged at zero. For a fully positive trajectory, this should only happen once - at the waning of maternal seropositivity 
+  mutate(check_seropositives = sum(time > 0 & status > 0)) %>% ## this checks the number of times after the first timestep (possible maternal immunity) that they pinged positive. If this is > 0, then they had a conversion
+  
+  
+  ungroup() %>%
+  mutate(classification = case_when(
+    zero_check == 1 & check_seropositives > 0 ~ "Lifelong seropositive", ## if they only pinged seronegative once and they pinged for seroconversions, then they are a lifelong seropositive
+    zero_check == 1 & check_seropositives == 0 ~ "Lifelong seronegative", ## if they only pinged seronegative once and they never pinged for seroconversion, they are a lifelong seronegative
+    zero_check > 1 & check_seropositives > 0 ~ "Fluctuating" ## if they pinged seronegative more than once and they pinged seroconversion at least once, they fluctuated
+  )) %>%
+  ungroup()
+
+write_csv(multi_traj_dat, "../data/data_hypotheses/classify_multi_trajectories.csv")
+  
+```
+## Binary
+```{r}
+binary_traj_dat <- read_csv("../data/data_hypotheses/binary_trajectories.csv") %>%
+  group_by(ID, strain) %>%
+  mutate(zero_check = sum(status == 0)) %>% ## this gives us the number of times they pinged at zero. For a fully positive trajectory, this should only happen once - at the waning of maternal seropositivity 
+  mutate(check_seropositives = sum(time > 0 & status > 0)) %>% ## this checks the number of times after the first timestep (possible maternal immunity) that they pinged positive. If this is > 0, then they had a conversion
+  ungroup() %>%
+  mutate(classification = case_when(
+    zero_check == 1 & check_seropositives > 0 ~ "Lifelong seropositive", ## if they only pinged seronegative once and they pinged for seroconversions, then they are a lifelong seropositive
+    zero_check == 1 & check_seropositives == 0 ~ "Lifelong seronegative", ## if they only pinged seronegative once and they never pinged for seroconversion, they are a lifelong seronegative
+    zero_check > 1 & check_seropositives > 0 ~ "Fluctuating" ## if they pinged seronegative more than once and they pinged seroconversion at least once, they fluctuated
+  )) %>%
+  ungroup()
+
+write_csv(binary_traj_dat, "../data/data_hypotheses/classify_binary_trajectories.csv")
+```
+
+
+# Get confidence intervals
+```{r}
+
+par_grid <- c(" b2 .csv", " l43 .csv", " l32 .csv", " l10 .csv", " l21 .csv", " b0 .csv", " b1 .csv", " rho_m .csv", " sigma .csv")
+a229E_4 <- NULL
+for (i in 1:length(par_grid)){
+  a229E_4 <- a229E_4 %>% rbind(read_csv(paste("Profile_Folder_229E_4/data_out/",par_grid[i], sep = "")))
+}
+OC43_4 <- NULL 
+for (i in 1:length(par_grid)){
+  OC43_4 <- OC43_4 %>% rbind(read_csv(paste("Profile_Folder_OC43_4/data_out/",par_grid[i], sep = "")))
+}
+NL63_4 <- NULL
+for (i in 1:length(par_grid)){
+  NL63_4 <- NL63_4 %>% rbind(read_csv(paste("Profile_Folder_NL63/data_out/",par_grid[i], sep = "")))
+}
+par_grid <- c(" b2 .csv", " l54 .csv", " l43 .csv", " l32 .csv", " l10 .csv", " l21 .csv", " b0 .csv", " b3 .csv", " b1 .csv", " rho_m .csv", " sigma .csv")
+HKU1_5 <- NULL
+for (i in 1:length(par_grid)){
+  HKU1_5 <- HKU1_5 %>% rbind(read_csv(paste("Profile_Folder_HKU1_5/data_out/",par_grid[i], sep = "")))
+}
+par_grid <- c(" lambda_0 .csv", " sigma .csv", " rho_m .csv")
+a229E_2 <- NULL
+for (i in 1:length(par_grid)){
+  a229E_2 <- a229E_2 %>% rbind(read_csv(paste("Profile_Folder_Binary_229E/data_out/",par_grid[i], sep = "")))
+}
+OC43_2 <- NULL
+for (i in 1:length(par_grid)){
+  OC43_2 <- OC43_2 %>% rbind(read_csv(paste("Profile_Folder_Binary_OC43/data_out/",par_grid[i], sep = "")))
+}
+NL63_2 <- NULL
+for (i in 1:length(par_grid)){
+  NL63_2 <- NL63_2 %>% rbind(read_csv(paste("Profile_Folder_Binary_NL63/data_out/",par_grid[i], sep = "")))
+}
+HKU1_2 <- NULL
+for (i in 1:length(par_grid)){
+  HKU1_2 <- HKU1_2 %>% rbind(read_csv(paste("Profile_Folder_Binary_HKU1/data_out/",par_grid[i], sep = "")))
+}
+
+
+full_profile <- a229E_4 %>% mutate(strain = "a_229E_S1", model = "Variation") %>%
+  rbind(OC43_4 %>% mutate(strain = "OC43_HE", model = "Variation")) %>%
+  rbind(NL63_4 %>% mutate(strain = "NL63_S1", model = "Variation")) %>%
+  rbind(HKU1_5 %>% mutate(strain = "HKU1_S1", model = "Variation")) %>%
+  rbind(a229E_2 %>% mutate(strain = "a_229E_S1", model = "Binary")) %>%
+  rbind(OC43_2 %>% mutate(strain = "OC43_HE", model = "Binary")) %>%
+  rbind(NL63_2 %>% mutate(strain = "NL63_S1", model = "Binary")) %>%
+  rbind(HKU1_2 %>% mutate(strain = "HKU1_S1", model = "Binary"))
+
+write_csv(full_profile, "../data/profiling/full_profile.csv")
+
+```
+
+
+
+
+
+
+
+
+
+
+

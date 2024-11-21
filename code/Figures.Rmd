@@ -1,0 +1,844 @@
+---
+title: "Figures"
+output: html_notebook
+---
+
+```{r setup, include = TRUE}
+#### GENERAL ######
+library(tidyverse)
+library(readxl) ## read excel files
+
+##### STATISTICS ####
+library(Hmisc)
+library(oce)
+library(zoo)
+library(spatstat.utils)
+library(Metrics)
+
+######## PALETTES ######
+library(RColorBrewer) 
+library(wesanderson)
+library(ghibli)
+library(NatParksPalettes)
+library(viridis)
+library(MetBrewer)
+library(PNWColors)
+
+####### PLOT MACHINERY ######
+library(directlabels)
+library(cowplot)
+library(scales)
+library(patchwork)
+library(ggh4x)
+library(ggrepel)
+library(svglite)
+```
+
+# Load data
+
+```{r, include = TRUE}
+
+multi_traj <- read_csv("../data/data_hypotheses/classify_multi_trajectories.csv")
+binary_traj <- read_csv("../data/data_hypotheses/classify_binary_trajectories.csv")
+
+
+return_fits <- read_csv("../data/data_hypotheses/return_fits.csv")
+return_simulations <- read_csv("../data/data_hypotheses/return_simulations.csv")
+
+
+data_all <- read_csv("../data/data_hypotheses/gmm_out/data_all.csv")
+data_all2 <- read_csv("../data/data_hypotheses/gmm_out/data_all2.csv")
+
+dataFull <- read_csv("../data/data_hypotheses/gmm_out/dataFull.csv")
+dataFull2 <- read_csv("../data/data_hypotheses/gmm_out/dataFull2.csv")
+
+full_profile <- read_csv("../data/profiling/full_profile.csv")
+
+
+```
+
+# Fig 1
+
+```{r}
+
+mycolors <- c("#322117", "#ED5F42","#E3BBA7", "#c9bcdf", "#ffd265", "#77adba")
+
+
+fig1 <- dataFull %>%
+  rename(Serostatus = Group) %>%
+  mutate(Serostatus = case_when(
+    Serostatus == 1 ~ "P-",
+    Serostatus == 2 ~ "P+",
+    Serostatus == 3 ~ "P2+",
+    Serostatus == 4 ~ "P3+",
+    Serostatus == 5 ~ "P4+",
+    Serostatus == 6 ~ "P5+"
+  )) %>% 
+  mutate(strain = case_when(
+    strain == "a_229E_S1" ~ "229E-S1",
+    strain == "HKU1_S1" ~ "HKU1-S1",
+    strain == "NL63_S1" ~ "NL63-S1",
+    strain == "OC43_HE" ~ "OC43-HE"
+  )) %>%
+  ggplot() + 
+  geom_density(aes(sero, group = Serostatus, fill = Serostatus, colour = Serostatus),color = "black", size = 0.4,  alpha = 0.8) +
+  scale_color_manual("Serostatus", values = mycolors) +
+  scale_fill_manual("Serostatus", values = mycolors) +
+  facet_wrap(~strain, nrow = 1) + 
+  theme_minimal() +
+  scale_x_continuous("OD value", expand = c(0,0)) + 
+  scale_y_continuous("", expand = c(0,0)) +
+  ggtitle("Serostatus classification") +
+    theme(axis.text = element_text(size = 12, color = "black"),
+        axis.title = element_text(size = 12, color = "black"),
+        axis.line = element_blank(),
+        axis.ticks = element_line(color = "black"),
+        plot.title = element_text(colour = "black", size = 13.5, face = "bold"),
+        plot.title.position = "plot",
+        plot.subtitle = element_text(colour = "black", size = 12.5),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), "cm"),
+        legend.position = "right",
+        legend.key.width = unit(0.5, "cm"),
+        legend.text = element_text(size = 12, color = "black"),
+        legend.title = element_text(size = 14, color = "black"),
+        legend.margin=margin(1,1.5,0.5,0.5,unit = "line"),
+        strip.text = element_text(colour = "black", size = 12, hjust = 0),
+        strip.background = element_rect(colour="white", fill="white"),
+        panel.border = element_rect(colour = "black", fill=NA),
+        panel.spacing = unit(0.5, "cm"), aspect.ratio=1) 
+fig1
+
+```
+
+## save
+
+```{r}
+
+#fig1 <- plot_grid(fig1a, fig1b, nrow = 1, rel_widths = c(1,1.40), labels = c("A", "B"))
+
+ggsave("../Figures/Figure1.pdf", fig1, width = 8, height = 3)
+```
+
+# Fig 3
+
+## fig 3a
+
+```{r}
+## kawase wisteria 
+#yamanaka <- c("#EE7764", "#F1A093","#F1D39F", "#D2D4CF", "#0D8273", "#126A8D", "#054B54")
+#pal <- colorRampPalette(yamanaka)
+#pal <- colorRampPalette(mycolors)
+
+manhattan <- rev(c(
+  "#211C1C",
+  "#3F6E87",
+  "#6199AD",
+  "#D8D4C9",
+  "#E1B9AF",
+  "#D68076",
+  "#9F1B23"
+))
+
+pal <- colorRampPalette(
+manhattan
+)
+
+mypal <- rev(pal(7))
+
+#pal <- colorRampPalette(c(ghibli_palettes$PonyoMedium, "white"))
+#mypal <- pal(7)
+#mypal <- pnw_palette("Bay",8, type = "continuous")
+
+#geom_tile(data = subset(data_long, AIC == min_value), color = "black", size = 1.5)
+get_subset_minimums <- return_fits %>%
+  filter(exposure_hypothesis == "Binary") %>%
+  group_by(strain) %>%
+  mutate(scaled_AIC = AIC) %>% #rescale(-AIC, c(0,1))) %>%
+  ungroup() %>%
+  select(scaled_AIC, strain, exposure_hypothesis, rho, waning) %>%
+  distinct() %>%
+  mutate(hypothesis = if_else(exposure_hypothesis != "Binary", paste(exposure_hypothesis, waning, sep = ", "), exposure_hypothesis)) %>%
+  mutate(rho = if_else(rho == "rho_05", "4.56", "0.39")) %>% 
+    mutate(exposure_hypothesis = case_when(
+    exposure_hypothesis == "Binary" ~ "Binary model", 
+    exposure_hypothesis == "Ordered" ~ "Ordered model",
+    exposure_hypothesis == "Variation" ~ "Variation model"
+  )) %>%
+  group_by(strain) %>%
+  filter(scaled_AIC == min(scaled_AIC)) %>%
+  ungroup() %>%  mutate(strain = case_when(
+    strain == "a_229E_S1" ~ "229E-S1",
+    strain == "HKU1_S1" ~ "HKU1-S1",
+    strain == "NL63_S1" ~ "NL63-S1",
+    strain == "OC43_HE" ~ "OC43-HE"
+  ))
+
+fig3a <- return_fits %>%
+  group_by(strain) %>%
+  mutate(scaled_AIC = AIC) %>% #rescale(-AIC, c(0,1))) %>%
+  ungroup() %>%
+  filter(exposure_hypothesis == "Binary") %>%
+  select(scaled_AIC, strain, exposure_hypothesis, rho, waning) %>%
+  distinct() %>%
+  mutate(hypothesis = if_else(exposure_hypothesis != "Binary", paste(exposure_hypothesis, waning, sep = ", "), exposure_hypothesis)) %>%
+  mutate(rho = if_else(rho == "rho_05", "4.56", "0.39")) %>% 
+    mutate(exposure_hypothesis = case_when(
+    exposure_hypothesis == "Binary" ~ "Binary model", 
+    exposure_hypothesis == "Ordered" ~ "Ordered model",
+    exposure_hypothesis == "Variation" ~ "Variation model"
+  )) %>%
+  mutate(strain = case_when(
+    strain == "a_229E_S1" ~ "229E-S1",
+    strain == "HKU1_S1" ~ "HKU1-S1",
+    strain == "NL63_S1" ~ "NL63-S1",
+    strain == "OC43_HE" ~ "OC43-HE"
+  )) %>%
+  ggplot(aes(x = rho, y = strain, fill = scaled_AIC)) + 
+  geom_tile() +
+    geom_text(data = get_subset_minimums, color = "black", aes(label = round(scaled_AIC, 2))) +
+  scale_fill_gradientn("AIC", colors = mypal, n.breaks = 8, limits = c(-310, 300)) +
+  facet_wrap(~exposure_hypothesis, nrow = 1) + 
+  scale_y_discrete("sHCoV", expand = c(0,0)) + 
+  scale_x_discrete("Seroreversion rate (ρ)",expand = c(0,0)) +
+  ggtitle("Binary AIC", "Direct waning") + 
+      theme(axis.text = element_text(size = 12, color = "black"),
+        axis.title = element_text(size = 12, color = "black"),
+        axis.line = element_blank(),
+        axis.ticks = element_line(color = "black"),
+        plot.title = element_text(colour = "black", size = 15, face = "bold"),
+        plot.title.position = "plot",
+        plot.subtitle = element_text(colour = "black", size = 14),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), "cm"),
+        legend.position = "none",
+        legend.key.width = unit(0.5, "cm"),
+        legend.text = element_text(size = 12, color = "black"),
+        legend.title = element_text(size = 14, color = "black"),
+        legend.margin=margin(1,1.5,0.5,0.5,unit = "line"),
+        strip.text = element_text(colour = "black", size = 12, hjust = 0),
+        strip.background = element_rect(colour="white", fill="white"),
+        panel.border = element_rect(colour = "black", fill=NA),
+        panel.spacing = unit(0.5, "cm"), aspect.ratio=1) 
+fig3a
+```
+
+## Fig 3bc
+
+```{r}
+
+## kawase wisteria 
+#yamanaka <- c("#EE7764", "#F1A093","#F1D39F", "#D2D4CF", "#0D8273", "#126A8D", "#054B54")
+#pal <- colorRampPalette(yamanaka)
+#pal <- colorRampPalette(mycolors)
+
+manhattan <- rev(c(
+  "#211C1C",
+  "#3F6E87",
+  "#6199AD",
+  "#D8D4C9",
+  "#E1B9AF",
+  "#D68076",
+  "#9F1B23"
+))
+
+pal <- colorRampPalette(
+manhattan
+)
+
+mypal <- rev(pal(7))
+
+
+fig3b <- return_fits %>%
+  filter(waning == "Direct") %>%
+  group_by(strain) %>%
+  mutate(scaled_AIC = AIC) %>% #rescale(-AIC, c(0,1))) %>%
+  ungroup() %>%
+  filter(exposure_hypothesis != "Binary") %>%
+  select(scaled_AIC, strain, exposure_hypothesis, rho, waning) %>%
+  distinct() %>%
+  mutate(hypothesis = if_else(exposure_hypothesis != "Binary", paste(exposure_hypothesis, waning, sep = ", "), exposure_hypothesis)) %>%
+  mutate(rho = if_else(rho == "rho_05", "4.56", "0.39")) %>% 
+    mutate(exposure_hypothesis = case_when(
+    exposure_hypothesis == "Binary" ~ "Binary model", 
+    exposure_hypothesis == "Ordered" ~ "Ordered model",
+    exposure_hypothesis == "Variation" ~ "Variation model"
+  )) %>%
+  mutate(strain = case_when(
+    strain == "a_229E_S1" ~ "229E-S1",
+    strain == "HKU1_S1" ~ "HKU1-S1",
+    strain == "NL63_S1" ~ "NL63-S1",
+    strain == "OC43_HE" ~ "OC43-HE"
+  )) %>%
+  ggplot(aes(x = rho, y = strain, fill = scaled_AIC)) + 
+  geom_tile() +
+  facet_wrap(~exposure_hypothesis) + 
+  scale_fill_gradientn("AIC", colors = mypal, n.breaks = 8, limits = c(-310, 300)) +
+  scale_y_discrete("", expand = c(0,0)) + 
+  scale_x_discrete("Seroreversion rate (ρ)",expand = c(0,0)) +
+  ggtitle("Gradient AIC", "Direct waning") + 
+      theme(axis.text = element_text(size = 12, color = "black"),
+        axis.title = element_text(size = 12, color = "black"),
+        axis.line = element_blank(),
+        axis.ticks = element_line(color = "black"),
+        plot.title = element_text(colour = "black", size = 15, face = "bold"),
+        plot.title.position = "plot",
+        plot.subtitle = element_text(colour = "black", size = 14),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), "cm"),
+        legend.position = "none",
+        legend.key.width = unit(0.8, "cm"),
+        legend.text = element_text(size = 12, color = "black"),
+        legend.title = element_text(size = 14, color = "black"),
+        legend.margin=margin(1,1.5,0.8,0.8,unit = "line"),
+        strip.text = element_text(colour = "black", size = 12, hjust = 0),
+        strip.background = element_rect(colour="white", fill="white"),
+        panel.border = element_rect(colour = "black", fill=NA),
+        panel.spacing = unit(0.5, "cm"), aspect.ratio=1) 
+fig3b
+
+
+#geom_tile(data = subset(data_long, AIC == min_value), color = "black", size = 1.5)
+get_subset_minimums <- return_fits %>%
+  filter(waning == "Laddered") %>%
+  group_by(strain) %>%
+  mutate(scaled_AIC = AIC) %>% #rescale(-AIC, c(0,1))) %>%
+  ungroup() %>%
+  filter(exposure_hypothesis != "Binary") %>%
+  select(scaled_AIC, strain, exposure_hypothesis, rho, waning) %>%
+  distinct() %>%
+  mutate(hypothesis = if_else(exposure_hypothesis != "Binary", paste(exposure_hypothesis, waning, sep = ", "), exposure_hypothesis)) %>%
+  mutate(rho = if_else(rho == "rho_05", "4.56", "0.39")) %>% 
+    mutate(exposure_hypothesis = case_when(
+    exposure_hypothesis == "Binary" ~ "Binary model", 
+    exposure_hypothesis == "Ordered" ~ "Ordered model",
+    exposure_hypothesis == "Variation" ~ "Variation model"
+  )) %>%
+  group_by(strain) %>%
+  filter(scaled_AIC == min(scaled_AIC)) %>%
+  ungroup() %>%  mutate(strain = case_when(
+    strain == "a_229E_S1" ~ "229E-S1",
+    strain == "HKU1_S1" ~ "HKU1-S1",
+    strain == "NL63_S1" ~ "NL63-S1",
+    strain == "OC43_HE" ~ "OC43-HE"
+  ))
+
+fig3c <- return_fits %>%
+  filter(waning == "Laddered") %>%
+  group_by(strain) %>%
+  mutate(scaled_AIC = AIC) %>% #rescale(-AIC, c(0,1))) %>%
+  ungroup() %>%
+  filter(exposure_hypothesis != "Binary") %>%
+  select(scaled_AIC, strain, exposure_hypothesis, rho, waning) %>%
+  distinct() %>%
+  mutate(hypothesis = if_else(exposure_hypothesis != "Binary", paste(exposure_hypothesis, waning, sep = ", "), exposure_hypothesis)) %>%
+  mutate(rho = if_else(rho == "rho_05", "4.56", "0.39")) %>% 
+    mutate(exposure_hypothesis = case_when(
+    exposure_hypothesis == "Binary" ~ "Binary model", 
+    exposure_hypothesis == "Ordered" ~ "Ordered model",
+    exposure_hypothesis == "Variation" ~ "Variation model"
+  )) %>%
+  mutate(strain = case_when(
+    strain == "a_229E_S1" ~ "229E-S1",
+    strain == "HKU1_S1" ~ "HKU1-S1",
+    strain == "NL63_S1" ~ "NL63-S1",
+    strain == "OC43_HE" ~ "OC43-HE"
+  )) %>%
+  ggplot(aes(x = rho, y = strain, fill = scaled_AIC)) + 
+  geom_tile() +
+  geom_text(data = get_subset_minimums, color = "white", aes(label = round(scaled_AIC, 2))) +
+  facet_grid(~exposure_hypothesis) + 
+  scale_fill_gradientn("AIC", colors = mypal, n.breaks = 8, limits = c(-310, 300)) +
+  scale_y_discrete("", expand = c(0,0)) + 
+  scale_x_discrete("Seroreversion rate (ρ)",expand = c(0,0)) +
+  ggtitle("", "Sequential waning") + 
+      theme(axis.text = element_text(size = 12, color = "black"),
+        axis.title = element_text(size = 12, color = "black"),
+        axis.text.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.line = element_blank(),
+        axis.ticks = element_line(color = "black"),
+        plot.title = element_text(colour = "black", size = 15, face = "bold"),
+        plot.title.position = "plot",
+        plot.subtitle = element_text(colour = "black", size = 14),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), "cm"),
+        legend.position = "right",
+        legend.key.width = unit(0.8, "cm"),
+        legend.text = element_text(size = 12, color = "black"),
+        legend.title = element_text(size = 14, color = "black"),
+        legend.margin=margin(1,1.5,0.8,0.8,unit = "line"),
+        strip.text = element_text(colour = "black", size = 12, hjust = 0),
+        strip.background = element_rect(colour="white", fill="white"),
+        panel.border = element_rect(colour = "black", fill=NA),
+        panel.spacing = unit(0.5, "cm"), aspect.ratio=1) 
+fig3c
+
+## darker is better AIC
+
+```
+
+
+## save
+
+```{r}
+
+
+fig3bc <- plot_grid(NULL, fig3b, fig3c, nrow = 1, labels = c("B","", "C"), rel_widths = c(0.05,1.4,1.55))
+
+fig3 <- plot_grid(fig3a, fig3bc, nrow = 1, rel_widths = c(0.8,2.9), labels = c("A", ""))
+
+ggsave("../Figures/Figure3.jpg", fig3, width = 15, height = 4)
+
+```
+
+# Fig. 4, Table 1
+## Data
+```{r}
+
+grab_conf <- full_profile %>% filter(model != "Binary") %>%
+  filter(!(param %in% c("b0", "b1", "b2", "b3", "sigma"))) %>%
+  select(paras = param, conf_05, conf_95, strain)
+
+
+data_paramsB <- return_fits %>%
+  filter(exposure_hypothesis == "Variation", rho == "rho_95", waning == "Laddered") %>%
+  select(strain, paras, Estimate) %>%
+  filter(paras != "sigma") %>%
+  pivot_wider(names_from = paras, values_from = Estimate) %>%
+  mutate(l54 = if_else(is.na(l54), 0, l54),
+         b3 = if_else(is.na(b3), 0, b3)
+         ) %>%
+  group_by(strain) %>%
+  mutate(
+    l53 = b3*l54,
+    l52 = b2*l53,
+    l51 = b1*l52,
+    l50 = b0*l51,
+    l42 = b2*l43,
+    l41 = b1*l42,
+    l40 = b0*l41,
+    l31 = b1*l32,
+    l30 = b0*l31,
+    l20 = b0*l21,
+    l0 = l10 + l20 + l30 + l40 + l50,
+    l1 = l21 + l31 + l41 + l51,
+    l2 = l32 + l42 + l52,
+    l3 = l43 + l53,
+    l4 = l54
+  ) %>%
+  ungroup() %>%
+  select(strain, l0, l10, l20, l30, l40, l50,
+         l1, l21, l31, l41, l51, 
+         l2, l32, l42, l52, 
+         l3, l43, l53, 
+         l4, l54,
+         rho_m) %>%
+  pivot_longer(-strain, names_to = "paras", values_to = "Estimate") %>%
+  left_join(grab_conf, by = c("paras", "strain")) %>%
+    mutate(strain = case_when(
+    strain == "a_229E_S1" ~ "229E-S1",
+    strain == "HKU1_S1" ~ "HKU1-S1",
+    strain == "NL63_S1" ~ "NL63-S1",
+    strain == "OC43_HE" ~ "OC43-HE"
+  )) %>%
+  mutate(model = "Variation model")
+# data_parmsA <- return_fits %>%
+#   filter(exposure_hypothesis == "Binary", rho == "rho_95") %>%
+#   select(strain, paras, Estimate) %>%
+#   filter(paras != "sigma") %>%
+#   mutate(paras = gsub("lambda_", "λ", paras),
+#          paras = gsub("rho_", "ρ", paras)
+#          ) %>%
+#   mutate(strain = case_when(
+#     strain == "a_229E_S1" ~ "229E-S1",
+#     strain == "HKU1_S1" ~ "HKU1-S1",
+#     strain == "NL63_S1" ~ "NL63-S1",
+#     strain == "OC43_HE" ~ "OC43-HE"
+#   )) %>%
+#   mutate(model = "Binary model")
+
+data_parms_plot <- data_paramsB %>% select(strain, paras, Estimate) 
+```
+
+
+## Table 1
+```{r}
+
+table_1 <- data_parms_plot %>% 
+  mutate(Estimate = 1/Estimate) %>%
+  mutate(Estimate = round(Estimate, 2)) %>%
+  pivot_wider(names_from = "strain", values_from = "Estimate") %>%
+  select(Description = paras, 2:5) %>%
+  mutate(Description = fct_relevel(Description, 
+                                   c("λ0", "λ10", "λ20", "λ30", "λ40", "λ50",
+                                     "λ1", "λ21", "λ31", "λ41", "λ51",
+                                     "λ2", "λ32", "λ42", "λ52", 
+                                     "λ3", "λ43", "λ53", 
+                                     "λ4", "λ54"
+                                     )
+                                   ))
+
+write_csv(table_1, "../Figures/Table1.csv")
+
+```
+
+## Figure 4
+
+### Fig 4a
+
+```{r}
+
+mycolors <- c("#322117", "#ED5F42","#E3BBA7", "#c9bcdf", "#ffd265", "#77adba")
+
+
+sero_data <- data_all %>% 
+  select(strain, time = Age_con, Serostatus = Group, sero_prop) %>%
+  group_by(strain, time, Serostatus) %>%
+  summarise(sero_prop = sum(sero_prop)) %>%
+  ungroup() %>%
+  mutate(Serostatus = case_when(
+    Serostatus == 1 ~ "P-",
+    Serostatus == 2 ~ "P+",
+    Serostatus == 3 ~ "P2+",
+    Serostatus == 4 ~ "P3+",
+    Serostatus == 5 ~ "P4+",
+    Serostatus == 6 ~ "P5+"
+  )) %>%
+    mutate(strain = case_when(
+    strain == "a_229E_S1" ~ "229E-S1",
+    strain == "HKU1_S1" ~ "HKU1-S1",
+    strain == "NL63_S1" ~ "NL63-S1",
+    strain == "OC43_HE" ~ "OC43-HE"
+  ))
+
+fig4a <- return_simulations %>%
+  filter(choose_rho == "rho_95", waning == "Laddered", exposure == "Variation") %>%
+  select(time, Prop, Type, Group, strain = strain_type) %>%
+  rename(Serostatus = Group) %>%
+  mutate(Serostatus = case_when(
+    Serostatus == 1 ~ "P-",
+    Serostatus == 2 ~ "P+",
+    Serostatus == 3 ~ "P2+",
+    Serostatus == 4 ~ "P3+",
+    Serostatus == 5 ~ "P4+",
+    Serostatus == 6 ~ "P5+"
+  )) %>% 
+  mutate(strain = case_when(
+    strain == "a_229E_S1" ~ "229E-S1",
+    strain == "HKU1_S1" ~ "HKU1-S1",
+    strain == "NL63_S1" ~ "NL63-S1",
+    strain == "OC43_HE" ~ "OC43-HE"
+  )) %>%
+  group_by(time, Serostatus, strain) %>%
+  summarise(Prop = sum(Prop)) %>%
+  ungroup() %>%
+  right_join(sero_data, by = c("strain", "time", "Serostatus")) %>%
+  mutate(Serostatus_2 = Serostatus) %>%
+  group_by(strain) %>%
+  mutate(rmse_calc = rmse(sero_prop, Prop)) %>%
+  ungroup() %>%
+  ggplot(aes(x = time, y = sero_prop)) + 
+  geom_line(aes(y = Prop, color = Serostatus), size = 1.5) +
+  geom_point(size =2, aes(fill = Serostatus_2), shape = 21, color = "transparent") +
+  geom_text(aes(label = paste("RMSE =", round(rmse_calc, 4)), x = 35, y = 0.9), color = "black") +
+  #geom_point(shape = 1,size = 1.8,colour = "black") +
+  theme_bw() +
+  scale_color_manual("Predicted serostatus", values = mycolors, drop = FALSE) +
+  scale_fill_manual("Observed serostatus", values = mycolors, drop = FALSE) +
+  facet_wrap(~strain) + 
+  scale_y_continuous("") +
+  scale_x_continuous("Age (years)") +
+  guides(fill = guide_legend(ncol = 2, order = 1), color = guide_legend(ncol = 2, order = 2)) +
+  ggtitle("Serostatus Trajectories") +
+  theme(axis.text = element_text(size = 12, color = "black"),
+        axis.title = element_text(size = 12, color = "black"),
+        axis.line = element_blank(),
+        axis.ticks = element_line(color = "black"),
+        plot.title = element_text(colour = "black", size = 15, face = "bold"),
+        plot.title.position = "plot",
+        plot.subtitle = element_text(colour = "black", size = 14),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), "cm"),
+        legend.position = "right",
+        legend.key.width = unit(0.8, "cm"),
+        legend.text = element_text(size = 12, color = "black"),
+        legend.title = element_text(size = 14, color = "black"),
+        legend.margin=margin(1,1.5,0.8,0.8,unit = "line"),
+        strip.text = element_text(colour = "black", size = 12, hjust = 0),
+        strip.background = element_rect(colour="white", fill="white"),
+        panel.border = element_rect(colour = "black", fill=NA),
+        panel.spacing = unit(0.5, "cm"), aspect.ratio=0.4) 
+fig4a
+
+
+```
+
+
+### Fig 4b
+```{r}
+
+vals <- rev(c("#85032D",
+          "#C9667F",
+          "#D3A09A",
+          "#E3E0DA"
+                   ))
+
+mycolors <- colorRampPalette(vals)(10)
+
+plot_params_prop <- return_fits %>%
+  filter(exposure_hypothesis == "Variation", rho == "rho_95", waning == "Laddered") %>%
+  select(strain, paras, Estimate) %>%
+  filter(paras != "sigma") %>%
+  pivot_wider(names_from = paras, values_from = Estimate) %>%
+  mutate(l54 = if_else(is.na(l54), 0, l54),
+         b3 = if_else(is.na(b3), 0, b3)
+         ) %>%
+  mutate(
+    l53 = b3*l54,
+    l52 = b2*l53,
+    l51 = b1*l52,
+    l50 = b0*l51,
+    l42 = b2*l43,
+    l41 = b1*l42,
+    l40 = b0*l41,
+    l31 = b1*l32,
+    l30 = b0*l31,
+    l20 = b0*l21,
+    lambda_0 = l10 + l20 + l30 + l40 + l50,
+    lambda_1 = l21 + l31 + l41 + l51,
+    lambda_2 = l32 + l42 + l52,
+    lambda_3 = l43 + l53,
+    lambda_4 = l54,
+    `P0 to P5` = l50/lambda_0,
+    `P0 to P4` = l40/lambda_0,
+    `P0 to P3` = l30/lambda_0,
+    `P0 to P2` = l20/lambda_0,
+    `P0 to P1` = l10/lambda_0,
+    `P1 to P5` = l51/lambda_1,
+    `P1 to P4` = l41/lambda_1,
+    `P1 to P3` = l31/lambda_1,
+    `P1 to P2` = l21/lambda_1,
+    `P2 to P5` = l52/lambda_2,
+    `P2 to P4` = l42/lambda_2,
+    `P2 to P3` = l32/lambda_2,
+    `P3 to P5` = l53/lambda_3,
+    `P3 to P4` = l43/lambda_3,
+    `P4 to P5` = l54/lambda_4
+  ) %>%
+  select(strain, `P0 to P5`:`P4 to P5`) %>%
+  pivot_longer(-strain, names_to = "paras", values_to = "Estimate") %>%
+  mutate(paras = gsub("lambda_", "λ", paras),
+         paras = gsub("rho_", "ρ", paras)
+         ) %>%
+  mutate(serostatus = case_when(
+    substr(paras, 0, 2) == "P0" ~ "P-",
+    substr(paras, 0, 2) == "P1" ~ "P+",
+    substr(paras, 0, 2) == "P2" ~ "P2+",
+    substr(paras, 0, 2) == "P3" ~ "P3+",
+    substr(paras, 0, 2) == "P4" ~ "P4+",
+    substr(paras, 0, 2) == "P5" ~ "P5+"
+  ) ) %>%
+  mutate(paras = substr(paras, 7,8)) %>%
+  mutate(paras = case_when(
+    paras == "P0" ~ "P-",
+    paras == "P1" ~ "P+",
+    paras == "P2" ~ "P2+",
+    paras == "P3" ~ "P3+",
+    paras == "P4" ~ "P4+",
+    paras == "P5" ~ "P5+"
+  )) %>%
+  mutate(strain = case_when(
+    strain == "a_229E_S1" ~ "229E-S1",
+    strain == "HKU1_S1" ~ "HKU1-S1",
+    strain == "NL63_S1" ~ "NL63-S1",
+    strain == "OC43_HE" ~ "OC43-HE"
+  )) %>%
+  mutate(paras = fct_relevel(paras, c("P5+", "P4+", "P3+", "P2+", "P+"))) %>%
+  mutate(Estimate = if_else(strain != "HKU1-S1" & paras == "P5+", as.numeric("NA_val"), Estimate)) %>%
+  ggplot(aes(x = serostatus, y = paras,fill = Estimate)) +
+  geom_tile() +
+  facet_wrap(~strain, nrow = 2) +
+  scale_fill_gradientn("Probability",colors = mycolors, na.value="white") + 
+  ylab("To serostatus") +
+  xlab("From serostatus") +
+  theme_void() +
+  ggtitle("Strength of response to seroconversion") +
+  theme(axis.text = element_text(size = 12, color = "black"),
+      axis.text.x = element_text(angle = 45, vjust = 1, hjust = 1),
+      axis.title.y = element_text(angle = 90),
+        axis.title = element_text(size = 12, color = "black"),
+        axis.line = element_blank(),
+        axis.ticks = element_line(color = "black"),
+        plot.title = element_text(colour = "black", size = 13.5, face = "bold"),
+        plot.title.position = "plot",
+        plot.subtitle = element_text(colour = "black", size = 12.5),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.6), "cm"),
+        legend.position = "bottom",
+        legend.key.width = unit(1.0, "cm"),
+        legend.text = element_text(size = 11, color = "black"),
+        legend.title = element_text(size = 13, color = "black"),
+        legend.margin=margin(1,1.5,0.6,0.6,unit = "line"),
+        strip.text = element_text(colour = "black", size = 12, hjust = 0),
+        strip.background = element_rect(colour="white", fill="white"),
+        panel.border = element_rect(colour = "white", fill=NA),
+        panel.spacing = unit(0.85, "cm"), aspect.ratio=1) 
+plot_params_prop
+
+
+```
+
+
+
+
+## 4c
+
+```{r}
+
+# mycolors <- rev(c(
+#   "#447B91",
+#   "#D0D5B9",
+#   "#494E46"
+# ))
+
+#mycolors <- c("#c9bcdf", "#ffd265","#ED5F42","#77adba")
+
+mycolors <- c("#0D3127",  "#E3E7D4",
+              "#28AC35")
+
+#"#248C35"
+
+# mycolors <- c(ghibli_palettes$LaputaMedium[4],
+#             ghibli_palettes$LaputaMedium[5])
+
+grid_times <- expand_grid(
+  ID = 1:500,
+  strain = c("HKU1_S1", "a_229E_S1", "OC43_HE", "NL63_S1"),
+  time = seq(0,70, by = 0.1)
+)
+
+get_age_first_inf <- multi_traj %>% 
+  select(time, status, ID, strain) %>%
+  group_by(ID, strain) %>%
+  arrange(time) %>%
+  mutate(serostatus_jump = if_else(status > lag(status), "Jump", "No Jump")) %>%
+  filter(serostatus_jump == "Jump") %>%
+  filter(time == min(time)) %>%
+  ungroup() %>% 
+  select(age = time, ID, strain) %>%
+  right_join(grid_times, by = c("strain", "ID")) %>%
+  mutate(exposure_status = if_else(
+    age > time, "Unexposed", "Exposed"
+  )) %>% select(strain, time, ID, exposure_status)
+
+get_age_lose_immunity <- multi_traj %>% 
+  select(time, status, ID, strain) %>%
+  group_by(ID, strain) %>%
+  arrange(time) %>%
+  mutate(check_if_maternally_immune =  if_else(sum(time == 0 & status > 0) == 1,
+                                               "Maternally immune",
+                                               "Not maternally immune"
+                                      )) %>%
+  filter(check_if_maternally_immune == "Maternally immune", time != 0) %>%
+  filter(time == min(time)) %>%
+  select(maternal_time = time, ID, strain) %>%
+  right_join(grid_times, by = c("strain", "ID")) %>%
+  mutate(maternal_status = if_else(
+    maternal_time <= time  | is.na(maternal_time), "NonMaternal", "Maternal")) %>% select(strain, time, ID, maternal_status)
+
+
+combine_metric <- left_join(get_age_first_inf, get_age_lose_immunity, by = c("strain", "time", "ID")) %>%
+  mutate(State = case_when(
+    maternal_status == "Maternal" ~ "Maternal",
+    (maternal_status != "Maternal" | is.na(maternal_status)) & exposure_status == "Unexposed" ~ "Unexposed",
+    (maternal_status != "Maternal" | is.na(maternal_status)) & exposure_status == "Exposed" ~ "Exposed"
+  )) %>% 
+  select(State, time, ID, strain) %>%
+  mutate(count=1) %>%
+  group_by(State, time, strain) %>%
+  reframe(sum_count = sum(count)) %>%
+  ungroup()
+
+median_time <- multi_traj %>% 
+  select(time, status, ID, strain) %>%
+  group_by(ID, strain) %>%
+  arrange(time) %>%
+  mutate(serostatus_jump = if_else(status > lag(status), "Jump", "No Jump")) %>%
+  filter(serostatus_jump == "Jump") %>%
+  filter(time == min(time)) %>%
+  ungroup() %>% 
+  select(age = time, ID, strain) %>%
+  group_by(strain) %>%
+  summarise(age = median(age)) %>%
+  ungroup() %>%
+  select(strain, first_infection_age = age) %>%
+      mutate(strain = case_when(
+    strain == "a_229E_S1" ~ "229E-S1",
+    strain == "HKU1_S1" ~ "HKU1-S1",
+    strain == "NL63_S1" ~ "NL63-S1",
+    strain == "OC43_HE" ~ "OC43-HE"
+  ))
+
+fig42 <- combine_metric  %>%
+  group_by(time, strain) %>%
+  mutate(total_sum = sum(sum_count),
+         prop = sum_count/total_sum
+         ) %>%
+  ungroup() %>%
+  mutate(State = fct_relevel(State, c("Unexposed","Exposed", "Maternal"))) %>%
+  #filter(time < 7) %>%
+      mutate(strain = case_when(
+    strain == "a_229E_S1" ~ "229E-S1",
+    strain == "HKU1_S1" ~ "HKU1-S1",
+    strain == "NL63_S1" ~ "NL63-S1",
+    strain == "OC43_HE" ~ "OC43-HE"
+  )) %>%
+  right_join(median_time, by = "strain") %>%
+  mutate(strain = gsub("-S1", "", strain),
+         strain = gsub("-HE", "", strain)
+         ) %>%
+  ggplot(aes(x = time, y = prop)) +
+  geom_bar(stat = "identity", aes(fill = State, color = State)) +
+  geom_vline(aes(xintercept = first_infection_age), size = 1, linetype = "dashed") +
+  geom_label(data = median_time %>% mutate(strain = gsub("-S1", "", strain),
+         strain = gsub("-HE", "", strain)
+         ), aes(label = round(first_infection_age,2), x = first_infection_age-0.5, y = 0.5), fill = "white", color = "black", size = 3) +
+  facet_wrap(~strain)  +
+  scale_fill_manual(values = mycolors) +
+  scale_color_manual(values = mycolors) +
+  scale_x_continuous("Age (years)", expand = c(0,0), limits = c(0,8)) +
+  scale_y_continuous("Proportion", expand =c(0,0)) +
+  ggtitle("Age of first infection") +
+  theme(axis.text = element_text(size = 12, color = "black"),
+        axis.title = element_text(size = 12, color = "black"),
+        axis.line = element_blank(),
+        axis.ticks = element_line(color = "black"),
+        plot.title = element_text(colour = "black", size = 13.5, face = "bold"),
+        plot.title.position = "plot",
+        plot.subtitle = element_text(colour = "black", size = 12.5),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), "cm"),
+        legend.position = "bottom",
+        legend.key.width = unit(0.8, "cm"),
+        legend.text = element_text(size = 12, color = "black"),
+        legend.title = element_text(size = 14, color = "black"),
+        legend.margin=margin(1,1.5,0.8,0.8,unit = "line"),
+        strip.text = element_text(colour = "black", size = 12, hjust = 0),
+        strip.background = element_rect(colour="white", fill="white"),
+        panel.border = element_rect(colour = "black", fill=NA),
+        panel.spacing = unit(0.5, "cm"), aspect.ratio=1) 
+fig42
+  
+```
+
+## Save
+```{r}
+
+plot4bc <- plot_grid(plot_params_prop, fig42, labels = c("B", "C"), rel_widths = c(1,1))
+plot4 <- plot_grid(fig4a, plot4bc, labels = c("A", ""), rel_heights = c(0.8, 1), nrow = 2)
+
+ggsave("../Figures/Fig4.jpg", plot4, width = 11.6, height = 10.5)
+
+```
+
+
+
+
+
+
+
+
