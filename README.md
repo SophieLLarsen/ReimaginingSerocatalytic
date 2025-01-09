@@ -13,7 +13,7 @@ Code to fit models, run model simulations on best-fit parameters, and run indivi
 Between January and March 2020, a cross-sectional study was undertaken [1] at Guangzhou and Red Cross, Hong Kong on seroprevalence of four HCoVs in volunteers from Guangdong Women and Children Hospital and The Chinese University of Hong Kong. Plasma samples were collected from 1886 pediatric patients under 18 years old without signs of influenza-like illness as well as 528 volunteers whose age ranging from 16-67 years old. All peripheral blood samples were centrifuged at 3000 x g for 10 minutes at room temperature for plasma collection and kept at -80°C until used. All study procedures were performed after informed consent. The study was approved by the Human Research Ethics Committee at the Guangdong Women and Children Hospital (Approval number: 202101231) and The Chinese University of Hong Kong (IRB: 2020.229).
 
 ## Other data
-We used serological samples from [2] to parameterize the seroreversion rates in our study. 
+We used longitudinal serological samples from [2] to parameterize the seroreversion rates in our study. This data was publicly available; we have grouped it by individual hosts and include it in the data folder for the purposes of running model code.
 
 
 ## References
