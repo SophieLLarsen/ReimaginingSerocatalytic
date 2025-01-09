@@ -124,56 +124,23 @@ ggsave("../Supplement/Waning_Plot.jpg", plot_waning, width = 7.6, height = 8)
 ```
 
 
-# Points plot
+
+# Supplementary Guassian plot
+## Points plot
 ```{r}
 
-mycolors <- c("#322117", "#ED5F42","#E3BBA7", "#c9bcdf", "#ffd265", "#77adba")
+# mycolors <- c(
+#   ghibli_palettes$PonyoMedium[1], 
+#   ghibli_palettes$PonyoMedium[3],
+#   ghibli_palettes$PonyoMedium[4],
+#   ghibli_palettes$PonyoMedium[6],
+#   ghibli_palettes$MarnieMedium2[6],
+#   ghibli_palettes$LaputaMedium[5]
+#   )
 
-get_gradient_points <- dataFull %>%
-  rename(Serostatus = Group) %>%
-  mutate(Serostatus = case_when(
-    Serostatus == 1 ~ "P-",
-    Serostatus == 2 ~ "P+",
-    Serostatus == 3 ~ "P2+",
-    Serostatus == 4 ~ "P3+",
-    Serostatus == 5 ~ "P4+",
-    Serostatus == 6 ~ "P5+"
-  )) %>% 
-  mutate(strain = case_when(
-    strain == "a_229E_S1" ~ "229E-S1",
-    strain == "HKU1_S1" ~ "HKU1-S1",
-    strain == "NL63_S1" ~ "NL63-S1",
-    strain == "OC43_HE" ~ "OC43-HE"
-  )) %>%
-  ggplot(aes(x = Age_con, y = sero, color = Serostatus)) + 
-  geom_point(size = 0.5) + 
-  facet_wrap(~strain) + 
-  scale_color_manual("Serostatus", values = mycolors) +
-  scale_fill_manual("Serostatus", values = mycolors) +
-  facet_wrap(~strain, nrow = 2) + 
-  theme_minimal() +
-  scale_x_continuous("Age", expand = c(0,0)) + 
-  scale_y_continuous("", expand = c(0,0)) +
-  ggtitle("", "Gradient") +
-  guides(colour = guide_legend(override.aes = list(size=2))) +
-    theme(axis.text = element_text(size = 12, color = "black"),
-        axis.title = element_text(size = 12, color = "black"),
-        axis.line = element_blank(),
-        axis.ticks = element_line(color = "black"),
-        plot.title = element_text(colour = "black", size = 13.5, face = "bold", hjust = 0.2),
-        plot.title.position = "plot",
-        plot.subtitle = element_text(colour = "black", size = 12.5, hjust = 0.1),
-        plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), "cm"),
-        legend.position = "right",
-        legend.key.width = unit(0.5, "cm"),
-        legend.text = element_text(size = 12, color = "black"),
-        legend.title = element_text(size = 14, color = "black"),
-        legend.margin=margin(1,1.5,0.5,0.5,unit = "line"),
-        strip.text = element_text(colour = "black", size = 12, hjust = 0),
-        strip.background = element_rect(colour="white", fill="white"),
-        panel.border = element_rect(colour = "black", fill=NA),
-        panel.spacing = unit(0.5, "cm"), aspect.ratio=1) 
-get_gradient_points
+#Motohakone, Kawase
+
+mycolors <- c("#322117", "#ED5F42","#E3BBA7", "#c9bcdf", "#ffd265", "#77adba")
 
 
 loess_data <- dataFull2 %>%
@@ -212,15 +179,15 @@ get_binary_points <- dataFull2 %>%
   facet_wrap(~strain, nrow = 2) + 
   theme_minimal() +
   scale_x_continuous("Age", expand = c(0,0)) + 
-  scale_y_continuous("OD value", expand = c(0,0)) +
-  ggtitle("Serostatus classification", "Binary") +
+  scale_y_continuous(name = expression("OD"["450"]), expand = c(0,0)) +
+  ggtitle("Serostatus classification", "Serology by age") +
     theme(axis.text = element_text(size = 12, color = "black"),
         axis.title = element_text(size = 12, color = "black"),
         axis.line = element_blank(),
         axis.ticks = element_line(color = "black"),
-        plot.title = element_text(colour = "black", size = 13.5, face = "bold", hjust = 0.2),
+        plot.title = element_text(colour = "black", size = 13.5, face = "bold"),
         plot.title.position = "plot",
-        plot.subtitle = element_text(colour = "black", size = 12.5, hjust = 0.1),
+        plot.subtitle = element_text(colour = "black", size = 12.5),
         plot.margin = unit(c(0.1, 0.4, 0.1, 0.1), "cm"),
         legend.position = "none",
         legend.key.width = unit(0.5, "cm"),
@@ -230,18 +197,187 @@ get_binary_points <- dataFull2 %>%
         strip.text = element_text(colour = "black", size = 12, hjust = 0),
         strip.background = element_rect(colour="white", fill="white"),
         panel.border = element_rect(colour = "black", fill=NA),
-        panel.spacing = unit(0.5, "cm"), aspect.ratio=1) 
+        panel.spacing = unit(0.5, "cm"), aspect.ratio=0.8) 
 get_binary_points
 
 
+fig1a_original <- dataFull2 %>%
+  rename(Serostatus = Group) %>%
+  mutate(Serostatus = case_when(
+    Serostatus == 0 ~ "P-",
+    Serostatus == 1 ~ "P+",
+  )) %>% 
+  mutate(strain = case_when(
+    strain == "a_229E_S1" ~ "229E-S1",
+    strain == "HKU1_S1" ~ "HKU1-S1",
+    strain == "NL63_S1" ~ "NL63-S1",
+    strain == "OC43_HE" ~ "OC43-HE"
+  )) %>%
+  ggplot() + 
+  geom_density(aes(sero, group = Serostatus, fill = Serostatus, colour = Serostatus), color = "black", size = 0.4, alpha = 0.8) +
+  #stat_density(aes(sero, group = Serostatus, fill = Serostatus, colour = Serostatus), color = "black", size = 0.4,bins = 30, alpha = 0.8) +
+  scale_color_manual("Serostatus", values = mycolors) +
+  scale_fill_manual("Serostatus", values = mycolors) +
+  facet_wrap(~strain, nrow = 2) + 
+  theme_minimal() +
+  scale_x_continuous(name = expression("OD"["450"]), expand = c(0,0)) + 
+  scale_y_continuous("Density", expand = c(0,0)) +
+  ggtitle("", "Density distributions") +
+    theme(axis.text = element_text(size = 12, color = "black"),
+        axis.title = element_text(size = 12, color = "black"),
+        axis.line = element_blank(),
+        axis.ticks = element_line(color = "black"),
+        plot.title = element_text(colour = "black", size = 13.5, face = "bold"),
+        plot.title.position = "plot",
+        plot.subtitle = element_text(colour = "black", size = 12.5),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), "cm"),
+        legend.position = "right",
+        legend.key.width = unit(0.5, "cm"),
+        legend.text = element_text(size = 12, color = "black"),
+        legend.title = element_text(size = 14, color = "black"),
+        legend.margin=margin(1,1.5,0.5,0.5,unit = "line"),
+        strip.text = element_text(colour = "black", size = 12, hjust = 0),
+        strip.background = element_rect(colour="white", fill="white"),
+        panel.border = element_rect(colour = "black", fill=NA),
+        panel.spacing = unit(0.5, "cm"), aspect.ratio=0.8) 
+fig1a_original
 
 ```
-## Save
+## Arrange points
 ```{r}
 
-plot_points <- plot_grid(get_binary_points, get_gradient_points, labels = c("A", "B"), rel_widths = c(1,1.48))
+plot_points <- plot_grid(get_binary_points, fig1a_original, labels = c("A", "B"), rel_widths = c(1,1.3))
 
-ggsave("../Supplement/Serostatus_Points.jpg", plot_points, width = 7, height = 4.1)
+#ggsave("../Supplement/Serostatus_Points.jpg", plot_points, width = 7, height = 4.1)
+
+```
+
+## Frequency plot
+## Fig 1A
+
+```{r}
+
+# mycolors <- c(
+#   ghibli_palettes$PonyoMedium[1], 
+#   ghibli_palettes$PonyoMedium[3],
+#   ghibli_palettes$PonyoMedium[4],
+#   ghibli_palettes$PonyoMedium[6],
+#   ghibli_palettes$MarnieMedium2[6],
+#   ghibli_palettes$LaputaMedium[5]
+#   )
+
+#Motohakone, Kawase
+
+mycolors <- c("#322117", "#ED5F42","#E3BBA7", "#c9bcdf", "#ffd265", "#77adba")
+
+
+fig1a <- dataFull2 %>%
+  rename(Serostatus = Group) %>%
+  mutate(Serostatus = case_when(
+    Serostatus == 0 ~ "-",
+    Serostatus == 1 ~ "+",
+  )) %>% 
+  mutate(strain = case_when(
+    strain == "a_229E_S1" ~ "229E-S1",
+    strain == "HKU1_S1" ~ "HKU1-S1",
+    strain == "NL63_S1" ~ "NL63-S1",
+    strain == "OC43_HE" ~ "OC43-HE"
+  )) %>%
+  ggplot() + 
+  geom_histogram(aes(sero, group = Serostatus, fill = Serostatus, colour = Serostatus), color = "black", size = 0.4,bins = 30, alpha = 0.9) +
+  scale_color_manual("Serostatus", values = mycolors) +
+  scale_fill_manual("Serostatus", values = mycolors) +
+  facet_wrap(~strain, nrow = 2) + 
+  theme_minimal() +
+  scale_x_continuous(name = expression("OD"["450"]), expand = c(0,0)) + 
+  scale_y_continuous("Frequency", expand = c(0,0)) +
+  ggtitle("Frequency", "Binary") +
+    theme(axis.text = element_text(size = 12, color = "black"),
+        axis.title = element_text(size = 12, color = "black"),
+        axis.line = element_blank(),
+        axis.ticks = element_line(color = "black"),
+        plot.title = element_text(colour = "black", size = 13.5, face = "bold", hjust = 0.1),
+        plot.title.position = "plot",
+        plot.subtitle = element_text(colour = "black", size = 12.5, hjust = 0.1),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), "cm"),
+        legend.position = "none",
+        legend.key.width = unit(0.5, "cm"),
+        legend.text = element_text(size = 12, color = "black"),
+        legend.title = element_text(size = 14, color = "black"),
+        legend.margin=margin(1,1.5,0.5,0.5,unit = "line"),
+        strip.text = element_text(colour = "black", size = 12, hjust = 0),
+        strip.background = element_rect(colour="white", fill="white"),
+        panel.border = element_rect(colour = "black", fill=NA),
+        panel.spacing = unit(0.5, "cm"), aspect.ratio=1) 
+fig1a
+
+```
+
+## fig b
+```{r}
+
+mycolors <- c("#322117", "#ED5F42","#E3BBA7", "#c9bcdf", "#ffd265", "#77adba")
+
+
+fig1b <- dataFull %>%
+  rename(Serostatus = Group) %>%
+  mutate(Serostatus = case_when(
+    Serostatus == 1 ~ "P-",
+    Serostatus == 2 ~ "P+",
+    Serostatus == 3 ~ "P2+",
+    Serostatus == 4 ~ "P3+",
+    Serostatus == 5 ~ "P4+",
+    Serostatus == 6 ~ "P5+"
+  )) %>% 
+  mutate(strain = case_when(
+    strain == "a_229E_S1" ~ "229E-S1",
+    strain == "HKU1_S1" ~ "HKU1-S1",
+    strain == "NL63_S1" ~ "NL63-S1",
+    strain == "OC43_HE" ~ "OC43-HE"
+  )) %>%
+  ggplot() + 
+  geom_histogram(aes(sero, group = Serostatus, fill = Serostatus, colour = Serostatus),color = "black", size = 0.4, bins = 30, alpha = 0.9) +
+  scale_color_manual("Serostatus", values = mycolors) +
+  scale_fill_manual("Serostatus", values = mycolors) +
+  facet_wrap(~strain, nrow = 2) + 
+  theme_minimal() +
+  scale_x_continuous(name = expression("OD"["450"]), expand = c(0,0)) + 
+  scale_y_continuous("", expand = c(0,0)) +
+  ggtitle("", "Gradient") +
+    theme(axis.text = element_text(size = 12, color = "black"),
+        axis.title = element_text(size = 12, color = "black"),
+        axis.line = element_blank(),
+        axis.ticks = element_line(color = "black"),
+        plot.title = element_text(colour = "black", size = 13.5, face = "bold", hjust = 0.2),
+        plot.title.position = "plot",
+        plot.subtitle = element_text(colour = "black", size = 12.5, hjust = 0.1),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), "cm"),
+        legend.position = "right",
+        legend.key.width = unit(0.5, "cm"),
+        legend.text = element_text(size = 12, color = "black"),
+        legend.title = element_text(size = 14, color = "black"),
+        legend.margin=margin(1,1.5,0.5,0.5,unit = "line"),
+        strip.text = element_text(colour = "black", size = 12, hjust = 0),
+        strip.background = element_rect(colour="white", fill="white"),
+        panel.border = element_rect(colour = "black", fill=NA),
+        panel.spacing = unit(0.5, "cm"), aspect.ratio=1) 
+fig1b
+
+```
+
+## arrange frequency 
+```{r}
+fig1 <- plot_grid(fig1a, fig1b, nrow = 1, rel_widths = c(1,1.4), labels = c("C", "D"))
+
+```
+
+
+
+## Save
+```{r}
+FigureS1 <- plot_grid(plot_points, fig1, nrow = 2, rel_heights = c(1,1))
+
+ggsave("../Supplement/FigS1.jpg", FigureS1, width = 9, height = 10)
 
 ```
 
@@ -300,7 +436,7 @@ get_full_with_conf_variation <- rbind(get_par_est_binary, get_par_est_gradient) 
                               "b3" = expression(b["3"])
                               )
                    ) +   
-  ggtitle("Profile intervals on fit parameters", "Gradient") +
+  ggtitle("", "Gradient") +
       theme(axis.text = element_text(size = 15, color = "black"),
         axis.title = element_text(size = 12, color = "black"),
         axis.line = element_blank(),
@@ -319,17 +455,17 @@ get_full_with_conf_variation <- rbind(get_par_est_binary, get_par_est_gradient) 
         strip.text = element_text(size = 14, color = "black"),
         strip.background = element_rect(colour="white", fill="white"),
         panel.border = element_rect(colour = "black", fill=NA),
-        panel.spacing = unit(0.5, "cm"), aspect.ratio=0.5) 
+        panel.spacing = unit(0.5, "cm"), aspect.ratio=0.3) 
 get_full_with_conf_variation
 
 ```
 
-### Save
-```{r}
+<!-- ### Save -->
+<!-- ```{r} -->
 
-ggsave("../Supplement/Profiling_Gradient.jpg", get_full_with_conf_variation, width = 10, height = 6.2)
+<!-- ggsave("../Supplement/Profiling_Gradient.jpg", get_full_with_conf_variation, width = 10, height = 6.2) -->
 
-```
+<!-- ``` -->
 
 ## Binary
 ```{r}
@@ -404,490 +540,12 @@ get_full_with_conf_binary
 ### Save
 ```{r}
 
-ggsave("../Supplement/Profiling_Binary.jpg", get_full_with_conf_binary, width = 12, height = 2.5)
+profiling <- plot_grid(get_full_with_conf_binary, get_full_with_conf_variation, nrow = 2, labels = c("A", "B"), rel_heights = c(1,2))
+
+ggsave("../Supplement/Profiling.jpg",profiling, width = 14, height = 8)
 
 ```
 
-
-
-# Density plot
-## Fig 1A
-
-```{r}
-
-# mycolors <- c(
-#   ghibli_palettes$PonyoMedium[1], 
-#   ghibli_palettes$PonyoMedium[3],
-#   ghibli_palettes$PonyoMedium[4],
-#   ghibli_palettes$PonyoMedium[6],
-#   ghibli_palettes$MarnieMedium2[6],
-#   ghibli_palettes$LaputaMedium[5]
-#   )
-
-#Motohakone, Kawase
-
-mycolors <- c("#322117", "#ED5F42","#E3BBA7", "#c9bcdf", "#ffd265", "#77adba")
-
-
-fig1a <- dataFull2 %>%
-  rename(Serostatus = Group) %>%
-  mutate(Serostatus = case_when(
-    Serostatus == 0 ~ "-",
-    Serostatus == 1 ~ "+",
-  )) %>% 
-  mutate(strain = case_when(
-    strain == "a_229E_S1" ~ "229E-S1",
-    strain == "HKU1_S1" ~ "HKU1-S1",
-    strain == "NL63_S1" ~ "NL63-S1",
-    strain == "OC43_HE" ~ "OC43-HE"
-  )) %>%
-  ggplot() + 
-  geom_histogram(aes(sero, group = Serostatus, fill = Serostatus, colour = Serostatus), color = "black", size = 0.4,bins = 30, alpha = 0.9) +
-  scale_color_manual("Serostatus", values = mycolors) +
-  scale_fill_manual("Serostatus", values = mycolors) +
-  facet_wrap(~strain, nrow = 2) + 
-  theme_minimal() +
-  scale_x_continuous("OD value", expand = c(0,0)) + 
-  scale_y_continuous("Frequency", expand = c(0,0)) +
-  ggtitle("Serostatus classification", "Binary") +
-    theme(axis.text = element_text(size = 12, color = "black"),
-        axis.title = element_text(size = 12, color = "black"),
-        axis.line = element_blank(),
-        axis.ticks = element_line(color = "black"),
-        plot.title = element_text(colour = "black", size = 13.5, face = "bold", hjust = 0.2),
-        plot.title.position = "plot",
-        plot.subtitle = element_text(colour = "black", size = 12.5, hjust = 0.1),
-        plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), "cm"),
-        legend.position = "none",
-        legend.key.width = unit(0.5, "cm"),
-        legend.text = element_text(size = 12, color = "black"),
-        legend.title = element_text(size = 14, color = "black"),
-        legend.margin=margin(1,1.5,0.5,0.5,unit = "line"),
-        strip.text = element_text(colour = "black", size = 12, hjust = 0),
-        strip.background = element_rect(colour="white", fill="white"),
-        panel.border = element_rect(colour = "black", fill=NA),
-        panel.spacing = unit(0.5, "cm"), aspect.ratio=1) 
-fig1a
-
-```
-
-
-## Fig 1B
-
-```{r}
-
-mycolors <- c("#322117", "#ED5F42","#E3BBA7", "#c9bcdf", "#ffd265", "#77adba")
-
-
-fig1b <- dataFull %>%
-  rename(Serostatus = Group) %>%
-  mutate(Serostatus = case_when(
-    Serostatus == 1 ~ "P-",
-    Serostatus == 2 ~ "P+",
-    Serostatus == 3 ~ "P2+",
-    Serostatus == 4 ~ "P3+",
-    Serostatus == 5 ~ "P4+",
-    Serostatus == 6 ~ "P5+"
-  )) %>% 
-  mutate(strain = case_when(
-    strain == "a_229E_S1" ~ "229E-S1",
-    strain == "HKU1_S1" ~ "HKU1-S1",
-    strain == "NL63_S1" ~ "NL63-S1",
-    strain == "OC43_HE" ~ "OC43-HE"
-  )) %>%
-  ggplot() + 
-  geom_histogram(aes(sero, group = Serostatus, fill = Serostatus, colour = Serostatus),color = "black", size = 0.4, bins = 30, alpha = 0.9) +
-  scale_color_manual("Serostatus", values = mycolors) +
-  scale_fill_manual("Serostatus", values = mycolors) +
-  facet_wrap(~strain, nrow = 2) + 
-  theme_minimal() +
-  scale_x_continuous("OD value", expand = c(0,0)) + 
-  scale_y_continuous("", expand = c(0,0)) +
-  ggtitle("", "Gradient") +
-    theme(axis.text = element_text(size = 12, color = "black"),
-        axis.title = element_text(size = 12, color = "black"),
-        axis.line = element_blank(),
-        axis.ticks = element_line(color = "black"),
-        plot.title = element_text(colour = "black", size = 13.5, face = "bold", hjust = 0.2),
-        plot.title.position = "plot",
-        plot.subtitle = element_text(colour = "black", size = 12.5, hjust = 0.1),
-        plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), "cm"),
-        legend.position = "right",
-        legend.key.width = unit(0.5, "cm"),
-        legend.text = element_text(size = 12, color = "black"),
-        legend.title = element_text(size = 14, color = "black"),
-        legend.margin=margin(1,1.5,0.5,0.5,unit = "line"),
-        strip.text = element_text(colour = "black", size = 12, hjust = 0),
-        strip.background = element_rect(colour="white", fill="white"),
-        panel.border = element_rect(colour = "black", fill=NA),
-        panel.spacing = unit(0.5, "cm"), aspect.ratio=1) 
-fig1b
-
-```
-
-
-## save
-
-```{r}
-
-fig1 <- plot_grid(fig1a, fig1b, nrow = 1, rel_widths = c(1,1.40), labels = c("A", "B"))
-
-ggsave("../Supplement/Density_plot.pdf", fig1, width = 9, height = 5.2)
-```
-
-
-## former fig 1A
-
-```{r}
-
-# mycolors <- c(
-#   ghibli_palettes$PonyoMedium[1], 
-#   ghibli_palettes$PonyoMedium[3],
-#   ghibli_palettes$PonyoMedium[4],
-#   ghibli_palettes$PonyoMedium[6],
-#   ghibli_palettes$MarnieMedium2[6],
-#   ghibli_palettes$LaputaMedium[5]
-#   )
-
-#Motohakone, Kawase
-
-mycolors <- c("#322117", "#ED5F42","#E3BBA7", "#c9bcdf", "#ffd265", "#77adba")
-
-
-fig1a_original <- dataFull2 %>%
-  rename(Serostatus = Group) %>%
-  mutate(Serostatus = case_when(
-    Serostatus == 0 ~ "P-",
-    Serostatus == 1 ~ "P+",
-  )) %>% 
-  mutate(strain = case_when(
-    strain == "a_229E_S1" ~ "229E-S1",
-    strain == "HKU1_S1" ~ "HKU1-S1",
-    strain == "NL63_S1" ~ "NL63-S1",
-    strain == "OC43_HE" ~ "OC43-HE"
-  )) %>%
-  ggplot() + 
-  geom_density(aes(sero, group = Serostatus, fill = Serostatus, colour = Serostatus), color = "black", size = 0.4, alpha = 0.8) +
-  #stat_density(aes(sero, group = Serostatus, fill = Serostatus, colour = Serostatus), color = "black", size = 0.4,bins = 30, alpha = 0.8) +
-  scale_color_manual("Serostatus", values = mycolors) +
-  scale_fill_manual("Serostatus", values = mycolors) +
-  facet_wrap(~strain, nrow = 2) + 
-  theme_minimal() +
-  scale_x_continuous("OD value", expand = c(0,0)) + 
-  scale_y_continuous("Density", expand = c(0,0)) +
-  ggtitle("Serostatus classification", "Binary") +
-    theme(axis.text = element_text(size = 12, color = "black"),
-        axis.title = element_text(size = 12, color = "black"),
-        axis.line = element_blank(),
-        axis.ticks = element_line(color = "black"),
-        plot.title = element_text(colour = "black", size = 13.5, face = "bold"),
-        plot.title.position = "plot",
-        plot.subtitle = element_text(colour = "black", size = 12.5),
-        plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), "cm"),
-        legend.position = "right",
-        legend.key.width = unit(0.5, "cm"),
-        legend.text = element_text(size = 12, color = "black"),
-        legend.title = element_text(size = 14, color = "black"),
-        legend.margin=margin(1,1.5,0.5,0.5,unit = "line"),
-        strip.text = element_text(colour = "black", size = 12, hjust = 0),
-        strip.background = element_rect(colour="white", fill="white"),
-        panel.border = element_rect(colour = "black", fill=NA),
-        panel.spacing = unit(0.5, "cm"), aspect.ratio=1) 
-fig1a_original
-
-```
-
-## save
-```{r}
-
-ggsave("../Supplement/Density_plot2.pdf", fig1a_original, width = 5, height = 5.2)
-```
-
-# Binary AIC
-## Plot
-```{r}
-## kawase wisteria 
-#yamanaka <- c("#EE7764", "#F1A093","#F1D39F", "#D2D4CF", "#0D8273", "#126A8D", "#054B54")
-#pal <- colorRampPalette(yamanaka)
-#pal <- colorRampPalette(mycolors)
-
-manhattan <- rev(c(
-  "#211C1C",
-  "#3F6E87",
-  "#6199AD",
-  "#D8D4C9",
-  "#E1B9AF",
-  "#D68076",
-  "#9F1B23"
-))
-
-pal <- colorRampPalette(
-manhattan
-)
-
-mypal <- rev(pal(7))
-
-#pal <- colorRampPalette(c(ghibli_palettes$PonyoMedium, "white"))
-#mypal <- pal(7)
-#mypal <- pnw_palette("Bay",8, type = "continuous")
-
-#geom_tile(data = subset(data_long, AIC == min_value), color = "black", size = 1.5)
-get_subset_minimums <- return_fits %>%
-  filter(exposure_hypothesis == "Binary") %>%
-  group_by(strain) %>%
-  mutate(scaled_AIC = AIC) %>% #rescale(-AIC, c(0,1))) %>%
-  ungroup() %>%
-  select(scaled_AIC, strain, exposure_hypothesis, rho, waning) %>%
-  distinct() %>%
-  mutate(hypothesis = if_else(exposure_hypothesis != "Binary", paste(exposure_hypothesis, waning, sep = ", "), exposure_hypothesis)) %>%
-  mutate(rho = if_else(rho == "rho_05", "4.56", "0.39")) %>% 
-    mutate(exposure_hypothesis = case_when(
-    exposure_hypothesis == "Binary" ~ "Binary model", 
-    exposure_hypothesis == "Ordered" ~ "Ordered model",
-    exposure_hypothesis == "Variation" ~ "Variation model"
-  )) %>%
-  group_by(strain) %>%
-  filter(scaled_AIC == min(scaled_AIC)) %>%
-  ungroup() %>%  mutate(strain = case_when(
-    strain == "a_229E_S1" ~ "229E-S1",
-    strain == "HKU1_S1" ~ "HKU1-S1",
-    strain == "NL63_S1" ~ "NL63-S1",
-    strain == "OC43_HE" ~ "OC43-HE"
-  ))
-
-fig2a <- return_fits %>%
-  group_by(strain) %>%
-  mutate(scaled_AIC = AIC) %>% #rescale(-AIC, c(0,1))) %>%
-  ungroup() %>%
-  filter(exposure_hypothesis == "Binary") %>%
-  select(scaled_AIC, strain, exposure_hypothesis, rho, waning) %>%
-  distinct() %>%
-  mutate(hypothesis = if_else(exposure_hypothesis != "Binary", paste(exposure_hypothesis, waning, sep = ", "), exposure_hypothesis)) %>%
-  mutate(rho = if_else(rho == "rho_05", "4.56", "0.39")) %>% 
-    mutate(exposure_hypothesis = case_when(
-    exposure_hypothesis == "Binary" ~ "Binary model", 
-    exposure_hypothesis == "Ordered" ~ "Ordered model",
-    exposure_hypothesis == "Variation" ~ "Variation model"
-  )) %>%
-  mutate(strain = case_when(
-    strain == "a_229E_S1" ~ "229E-S1",
-    strain == "HKU1_S1" ~ "HKU1-S1",
-    strain == "NL63_S1" ~ "NL63-S1",
-    strain == "OC43_HE" ~ "OC43-HE"
-  )) %>%
-  ggplot(aes(x = rho, y = strain, fill = scaled_AIC)) + 
-  geom_tile() +
-    geom_text(data = get_subset_minimums, color = "black", aes(label = round(scaled_AIC, 2))) +
-  scale_fill_gradientn("AIC", colors = mypal, n.breaks = 8, limits = c(-310, 300)) +
-  facet_wrap(~exposure_hypothesis, nrow = 1) + 
-  scale_y_discrete("sHCoV", expand = c(0,0)) + 
-  scale_x_discrete("Seroreversion rate (ρ)",expand = c(0,0)) +
-  ggtitle("Binary AIC", "Direct waning") + 
-      theme(axis.text = element_text(size = 12, color = "black"),
-        axis.title = element_text(size = 12, color = "black"),
-        axis.line = element_blank(),
-        axis.ticks = element_line(color = "black"),
-        plot.title = element_text(colour = "black", size = 15, face = "bold"),
-        plot.title.position = "plot",
-        plot.subtitle = element_text(colour = "black", size = 14),
-        plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), "cm"),
-        legend.position = "right",
-        legend.key.width = unit(0.5, "cm"),
-        legend.text = element_text(size = 12, color = "black"),
-        legend.title = element_text(size = 14, color = "black"),
-        legend.margin=margin(1,1.5,0.5,0.5,unit = "line"),
-        strip.text = element_text(colour = "black", size = 12, hjust = 0),
-        strip.background = element_rect(colour="white", fill="white"),
-        panel.border = element_rect(colour = "black", fill=NA),
-        panel.spacing = unit(0.5, "cm"), aspect.ratio=1) 
-fig2a
-```
-
-
-## Save
-```{r}
-#fig_binary_traj <- plot_grid(fig2a, fig2d, labels = c("A", "B"), rel_widths = c(1, 1.5))
-
-ggsave("../Supplement/AIC_Binary.jpg", fig2a, width = 5, height = 4.6)
-
-```
-
-
-# Trajectories
-## Plot
-```{r}
-
-mycolors <- c("#322117", "#ED5F42","#E3BBA7", "#c9bcdf", "#ffd265", "#77adba")
-
-sero_data <- data_all2 %>% 
-  select(strain, time = Age_con, Serostatus = Group, sero_prop) %>%
-  group_by(strain, time, Serostatus) %>%
-  summarise(sero_prop = sum(sero_prop)) %>%
-  ungroup() %>%
-  mutate(Serostatus = case_when(
-    Serostatus == 1 ~ "P-",
-    Serostatus == 2 ~ "P+",
-    Serostatus == 3 ~ "P2+",
-    Serostatus == 4 ~ "P3+",
-    Serostatus == 5 ~ "P4+",
-    Serostatus == 6 ~ "P5+"
-  )) %>%
-  mutate(strain = case_when(
-    strain == "a_229E_S1" ~ "229E-S1",
-    strain == "HKU1_S1" ~ "HKU1-S1",
-    strain == "NL63_S1" ~ "NL63-S1",
-    strain == "OC43_HE" ~ "OC43-HE"
-  ))
-
-
-fig2d <- return_simulations %>%
-  filter(choose_rho == "rho_95", exposure == "Binary") %>%
-  select(time, Prop, Type, Group, strain = strain_type) %>%
-  rename(Serostatus = Group) %>%
-  mutate(Serostatus = case_when(
-    Serostatus == 1 ~ "P-",
-    Serostatus == 2 ~ "P+",
-    Serostatus == 3 ~ "P2+",
-    Serostatus == 4 ~ "P3+",
-    Serostatus == 5 ~ "P4+",
-    Serostatus == 6 ~ "P5+"
-  )) %>% 
-  mutate(strain = case_when(
-    strain == "a_229E_S1" ~ "229E-S1",
-    strain == "HKU1_S1" ~ "HKU1-S1",
-    strain == "NL63_S1" ~ "NL63-S1",
-    strain == "OC43_HE" ~ "OC43-HE"
-  )) %>%
-  group_by(time, Serostatus, strain) %>%
-  summarise(Prop = sum(Prop)) %>%
-  ungroup() %>%
-  right_join(sero_data, by = c("strain", "time", "Serostatus")) %>%
-  mutate(Serostatus_2 = Serostatus) %>%
-  group_by(strain) %>%
-  mutate(rmse_calc = rmse(sero_prop, Prop)) %>%
-  ungroup() %>%
-  ggplot(aes(x = time, y = sero_prop)) + 
-  geom_line(aes(y = Prop, color = Serostatus), size = 1.5) +
-  geom_point(size =2, aes(fill = Serostatus_2), shape = 21, color = "transparent") +
-  #geom_point(shape = 1,size = 1.8,colour = "black") +
-  theme_bw() +
-  scale_color_manual("Predicted serostatus", values = mycolors, labels = c("P-", "P+"), breaks = c("P-", "P+"), drop = FALSE) +
-  scale_fill_manual("Observed serostatus", values = mycolors, drop = FALSE) +
-  geom_text(aes(label = paste("RMSE =", round(rmse_calc, 4)), x = 35, y = 0.5), color = "black") +
-  facet_wrap(~strain) + 
-  scale_y_continuous("Proportion") +
-  scale_x_continuous("Age (years)") +
-  ggtitle("Binary model trajectories") +
-  theme(axis.text = element_text(size = 12, color = "black"),
-        axis.title = element_text(size = 12, color = "black"),
-        axis.line = element_blank(),
-        axis.ticks = element_line(color = "black"),
-        plot.title = element_text(colour = "black", size = 15, face = "bold"),
-        plot.title.position = "plot",
-        plot.subtitle = element_text(colour = "black", size = 14),
-        plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), "cm"),
-        legend.position = "right",
-        legend.key.width = unit(0.8, "cm"),
-        legend.text = element_text(size = 12, color = "black"),
-        legend.title = element_text(size = 14, color = "black"),
-        legend.margin=margin(1,1.5,0.8,0.8,unit = "line"),
-        strip.text = element_text(colour = "black", size = 12, hjust = 0),
-        strip.background = element_rect(colour="white", fill="white"),
-        panel.border = element_rect(colour = "black", fill=NA),
-        panel.spacing = unit(0.5, "cm"), aspect.ratio=0.5) 
-fig2d
-
-
-```
-
-
-## Save
-```{r}
-#fig_binary_traj <- plot_grid(fig2a, fig2d, labels = c("A", "B"), rel_widths = c(1, 1.5))
-
-ggsave("../Supplement/Trajectories_Binary.pdf", fig2d, width = 7.8, height = 4.5)
-
-```
-
-
-# Number of lifetime infections
-## Data
-```{r}
-
-count_infections_binary <- binary_traj %>%
-  group_by(strain, ID) %>%
-  arrange(time) %>%
-  mutate(count_conversion = if_else(
-    status > lag(status), 1, 0
-  )) %>%
-  summarise(count_total_conversion = sum(count_conversion, na.rm = T)) %>%
-  ungroup() %>%
-  mutate(model = "Binary Model")
-
-count_infections_multi <- multi_traj %>%
-  group_by(strain, ID) %>%
-  arrange(time) %>%
-  mutate(count_conversion = if_else(
-    status > lag(status), 1, 0
-  )) %>%
-  summarise(count_total_conversion = sum(count_conversion, na.rm = T)) %>%
-  ungroup() %>%
-  mutate(model = "Variation Model")
-
-
-total_count <- rbind(count_infections_binary, count_infections_multi)
-```
-
-## Plot
-```{r}
-
-mycolors <- c("#322117",
-              "#ED5F42",
-              "#E3BBA7",
-              "#c9bcdf",
-              "#ffd265",
-              "#77adba")
-
-plot_violin_binary <- total_count %>%
-  mutate(strain = case_when(
-    strain == "a_229E_S1" ~ "229E-S1",
-    strain == "HKU1_S1" ~ "HKU1-S1",
-    strain == "NL63_S1" ~ "NL63-S1",
-    strain == "OC43_HE" ~ "OC43-HE"
-  )) %>%
-  ggplot(aes(x = strain, y = count_total_conversion, fill = strain)) +
-  geom_boxplot(alpha = 0.7) +
-  theme_bw() +
-  facet_wrap(~model) +
-  scale_y_continuous("Total number of seroconversions") +
-  scale_x_discrete("sHCoV") +
-  scale_fill_manual("sHCoV",values = mycolors) +
-    theme(axis.text = element_text(size = 12, color = "black"),
-        axis.title = element_text(size = 12, color = "black"),
-        axis.line = element_blank(),
-        axis.ticks = element_line(color = "black"),
-        plot.title = element_text(colour = "black", size = 13.5, face = "bold"),
-        plot.title.position = "plot",
-        plot.subtitle = element_text(colour = "black", size = 12.5),
-        plot.margin = unit(c(0.1, 0.1, 0.1, 0.6), "cm"),
-        legend.position = "right",
-        legend.key.width = unit(0.5, "cm"),
-        legend.text = element_text(size = 12, color = "black"),
-        legend.title = element_text(size = 14, color = "black"),
-        legend.margin=margin(1,1.5,0.5,0.5,unit = "line"),
-        strip.text = element_text(colour = "black", size = 12, hjust = 0),
-        strip.background = element_rect(colour="white", fill="white"),
-        panel.border = element_rect(colour = "black", fill=NA),
-        panel.spacing = unit(0.5, "cm"), aspect.ratio=1) 
-plot_violin_binary
-
-```
-
-
-```{r}
-ggsave("../Supplement/Count_seroconversions.pdf", plot_violin_binary, width = 9, height = 5.2)
-
-```
 
 
 ## Parameter value plot
@@ -1079,7 +737,88 @@ ggsave("../Supplement/Param_Values.jpg", get_full, width = 5.8, height = 6.5)
 ```
 
 
-## Stochastic trajectories
+# Stochastic trajectories
+
+## Number of lifetime infections
+### Data
+```{r}
+
+count_infections_binary <- binary_traj %>%
+  group_by(strain, ID) %>%
+  arrange(time) %>%
+  mutate(count_conversion = if_else(
+    status > lag(status), 1, 0
+  )) %>%
+  summarise(count_total_conversion = sum(count_conversion, na.rm = T)) %>%
+  ungroup() %>%
+  mutate(model = "Binary Model")
+
+count_infections_multi <- multi_traj %>%
+  group_by(strain, ID) %>%
+  arrange(time) %>%
+  mutate(count_conversion = if_else(
+    status > lag(status), 1, 0
+  )) %>%
+  summarise(count_total_conversion = sum(count_conversion, na.rm = T)) %>%
+  ungroup() %>%
+  mutate(model = "Variation Model")
+
+
+total_count <- rbind(count_infections_binary, count_infections_multi)
+```
+
+### Plot
+```{r}
+
+mycolors <- c("#322117",
+              "#ED5F42",
+              "#E3BBA7",
+              "#c9bcdf",
+              "#ffd265",
+              "#77adba")
+
+plot_violin_binary <- total_count %>%
+  mutate(strain = case_when(
+    strain == "a_229E_S1" ~ "229E-S1",
+    strain == "HKU1_S1" ~ "HKU1-S1",
+    strain == "NL63_S1" ~ "NL63-S1",
+    strain == "OC43_HE" ~ "OC43-HE"
+  )) %>%
+  ggplot(aes(x = strain, y = count_total_conversion, fill = strain)) +
+  geom_boxplot(alpha = 0.7) +
+  theme_bw() +
+  facet_wrap(~model) +
+  scale_y_continuous("Total number of seroconversions") +
+  scale_x_discrete("sHCoV") +
+  scale_fill_manual("sHCoV",values = mycolors) +
+  ggtitle("Lifetime seroconversions") +
+    theme(axis.text = element_text(size = 12, color = "black"),
+        axis.title = element_text(size = 12, color = "black"),
+        axis.line = element_blank(),
+        axis.ticks = element_line(color = "black"),
+        plot.title = element_text(colour = "black", size = 13.5, face = "bold"),
+        plot.title.position = "plot",
+        plot.subtitle = element_text(colour = "black", size = 12.5),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.6), "cm"),
+        legend.position = "right",
+        legend.key.width = unit(0.5, "cm"),
+        legend.text = element_text(size = 12, color = "black"),
+        legend.title = element_text(size = 14, color = "black"),
+        legend.margin=margin(1,1.5,0.5,0.5,unit = "line"),
+        strip.text = element_text(colour = "black", size = 12, hjust = 0),
+        strip.background = element_rect(colour="white", fill="white"),
+        panel.border = element_rect(colour = "black", fill=NA),
+        panel.spacing = unit(0.5, "cm"), aspect.ratio=0.4) 
+plot_violin_binary
+
+```
+
+
+<!-- ```{r} -->
+<!-- ggsave("../Supplement/Count_seroconversions.pdf", plot_violin_binary, width = 9, height = 5.2) -->
+
+<!-- ``` -->
+
 ### Binary model
 
 ```{r}
@@ -1205,11 +944,11 @@ fig4a2
 
 ```
 
-### Save
+### Arrange
 ```{r}
-get_stoch_traj <- plot_grid(fig4a,NULL,fig4a2, rel_widths = c(1,0.3,3), labels = c("A", "", "B"), nrow = 1)
+get_stoch_traj <- plot_grid(fig4a,NULL,fig4a2, rel_widths = c(1,0.3,2.65), labels = c("B", "", "C"), nrow = 1)
 
-ggsave("../Supplement/Stochastic_Trajectories.jpg", get_stoch_traj, width = 10, height = 3.1)
+#ggsave("../Supplement/Stochastic_Trajectories.jpg", get_stoch_traj, width = 10, height = 3.1)
 ```
 
 
@@ -1240,7 +979,7 @@ fig4b <- multi_traj %>%
   )) %>%
   ggplot(aes(x="", y = prop, fill = classification))+
   geom_bar(width = 1, stat = "identity") + 
-  facet_wrap(~strain, nrow = 2) + 
+  facet_wrap(~strain, nrow = 1) + 
   coord_polar("y", start=0) + 
   scale_fill_manual("Type",values = mycolors) + 
   scale_y_continuous(expand = c(0,0)) +
@@ -1268,9 +1007,14 @@ fig4b
   
 ```
 
-### Save
+
+### Arrange + Save
 ```{r}
-ggsave("../Supplement/Trajectory_Proportions.jpg", fig4b, width = 6, height = 4)
+
+plot_full_stoch <- plot_grid(plot_violin_binary, get_stoch_traj, fig4b, nrow = 3, rel_heights = c(0.8,0.8,0.7), labels = c("A","", "D"))
+
+
+ggsave("../Supplement/Stochastic_Figure.jpg", plot_full_stoch, width = 12, height = 10)
 ```
 
 
@@ -1412,9 +1156,100 @@ fig41
 ```
 
 
+## Trajectories
+### Plot
+```{r}
+
+mycolors <- c("#322117", "#ED5F42","#E3BBA7", "#c9bcdf", "#ffd265", "#77adba")
+
+sero_data <- data_all2 %>% 
+  select(strain, time = Age_con, Serostatus = Group, sero_prop) %>%
+  group_by(strain, time, Serostatus) %>%
+  summarise(sero_prop = sum(sero_prop)) %>%
+  ungroup() %>%
+  mutate(Serostatus = case_when(
+    Serostatus == 1 ~ "P-",
+    Serostatus == 2 ~ "P+",
+    Serostatus == 3 ~ "P2+",
+    Serostatus == 4 ~ "P3+",
+    Serostatus == 5 ~ "P4+",
+    Serostatus == 6 ~ "P5+"
+  )) %>%
+  mutate(strain = case_when(
+    strain == "a_229E_S1" ~ "229E-S1",
+    strain == "HKU1_S1" ~ "HKU1-S1",
+    strain == "NL63_S1" ~ "NL63-S1",
+    strain == "OC43_HE" ~ "OC43-HE"
+  ))
+
+
+fig2d <- return_simulations %>%
+  filter(choose_rho == "rho_95", exposure == "Binary") %>%
+  select(time, Prop, Type, Group, strain = strain_type) %>%
+  rename(Serostatus = Group) %>%
+  mutate(Serostatus = case_when(
+    Serostatus == 1 ~ "P-",
+    Serostatus == 2 ~ "P+",
+    Serostatus == 3 ~ "P2+",
+    Serostatus == 4 ~ "P3+",
+    Serostatus == 5 ~ "P4+",
+    Serostatus == 6 ~ "P5+"
+  )) %>% 
+  mutate(strain = case_when(
+    strain == "a_229E_S1" ~ "229E-S1",
+    strain == "HKU1_S1" ~ "HKU1-S1",
+    strain == "NL63_S1" ~ "NL63-S1",
+    strain == "OC43_HE" ~ "OC43-HE"
+  )) %>%
+  group_by(time, Serostatus, strain) %>%
+  summarise(Prop = sum(Prop)) %>%
+  ungroup() %>%
+  right_join(sero_data, by = c("strain", "time", "Serostatus")) %>%
+  mutate(Serostatus_2 = Serostatus) %>%
+  group_by(strain) %>%
+  mutate(rmse_calc = rmse(sero_prop, Prop)) %>%
+  ungroup() %>%
+  ggplot(aes(x = time, y = sero_prop)) + 
+  geom_line(aes(y = Prop, color = Serostatus), size = 1.5) +
+  geom_point(size =2, aes(fill = Serostatus_2), shape = 21, color = "transparent") +
+  #geom_point(shape = 1,size = 1.8,colour = "black") +
+  theme_bw() +
+  scale_color_manual("Predicted serostatus", values = mycolors, labels = c("P-", "P+"), breaks = c("P-", "P+"), drop = FALSE) +
+  scale_fill_manual("Observed serostatus", values = mycolors, drop = FALSE) +
+  geom_text(aes(label = paste("RMSE =", round(rmse_calc, 4)), x = 35, y = 0.5), color = "black") +
+  facet_wrap(~strain) + 
+  scale_y_continuous("Proportion") +
+  scale_x_continuous("Age (years)") +
+  ggtitle("Binary model trajectories") +
+  theme(axis.text = element_text(size = 12, color = "black"),
+        axis.title = element_text(size = 12, color = "black"),
+        axis.line = element_blank(),
+        axis.ticks = element_line(color = "black"),
+        plot.title = element_text(colour = "black", size = 15, face = "bold"),
+        plot.title.position = "plot",
+        plot.subtitle = element_text(colour = "black", size = 14),
+        plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), "cm"),
+        legend.position = "right",
+        legend.key.width = unit(0.8, "cm"),
+        legend.text = element_text(size = 12, color = "black"),
+        legend.title = element_text(size = 14, color = "black"),
+        legend.margin=margin(1,1.5,0.8,0.8,unit = "line"),
+        strip.text = element_text(colour = "black", size = 12, hjust = 0),
+        strip.background = element_rect(colour="white", fill="white"),
+        panel.border = element_rect(colour = "black", fill=NA),
+        panel.spacing = unit(0.5, "cm"), aspect.ratio=0.5) 
+fig2d
+
+
+```
+
 ### Save
 ```{r}
-ggsave("../Supplement/Binary_Age_of_infection.jpg", fig41, width = 6, height = 4)
+
+get_binary_fig4 <- plot_grid(fig41, fig2d, nrow = 2, rel_heights = c(1,0.8), labels = c("A", "B"))
+
+
+ggsave("../Supplement/Binaryfig4.jpg", get_binary_fig4, width = 8, height = 8)
 ```
 
 
@@ -1553,7 +1388,7 @@ fig_rmse_binary <- return_simulations %>%
         plot.title.position = "plot",
         plot.subtitle = element_text(colour = "black", size = 14),
         plot.margin = unit(c(0.1, 0.1, 0.1, 0.1), "cm"),
-        legend.position = "right",
+        legend.position = "none",
         legend.key.width = unit(0.5, "cm"),
         legend.text = element_text(size = 12, color = "black"),
         legend.title = element_text(size = 14, color = "black"),
@@ -1567,13 +1402,13 @@ fig_rmse_binary
   
 ```
 
-## Save
-```{r}
-#fig_binary_traj <- plot_grid(fig2a, fig2d, labels = c("A", "B"), rel_widths = c(1, 1.5))
+<!-- ## Save -->
+<!-- ```{r} -->
+<!-- #fig_binary_traj <- plot_grid(fig2a, fig2d, labels = c("A", "B"), rel_widths = c(1, 1.5)) -->
 
-ggsave("../Supplement/RMSE_Binary.jpg", fig_rmse_binary, width = 5, height = 4.6)
+<!-- ggsave("../Supplement/RMSE_Binary.jpg", fig_rmse_binary, width = 5, height = 4.6) -->
 
-```
+<!-- ``` -->
 
 
 
@@ -1662,7 +1497,7 @@ get_subset_minimums <- return_simulations %>%
   filter(rmse_calc == min(rmse_calc)) %>%
   ungroup()
 
-fig_rmse_ordered <- return_simulations %>%
+fig_rmse_direct <- return_simulations %>%
   filter(exposure != "Binary", waning == "Direct") %>%
   rename(exposure_hypothesis = exposure) %>%
   select(time, Prop, Type, Group, waning, choose_rho, exposure_hypothesis, strain = strain_type) %>%
@@ -1698,7 +1533,7 @@ fig_rmse_ordered <- return_simulations %>%
   ggplot(aes(x = choose_rho, y = strain, fill = rmse_calc)) + 
   geom_tile() +
   #geom_text(data = get_subset_minimums, color = "black", aes(label = round(rmse_calc, 4))) +
-  scale_fill_gradientn("RMSE", colors = mypal, n.breaks = 8, limits = c(0,0.3)) +
+  scale_fill_gradientn("RMSE", colors = mypal, n.breaks = 8, limits = c(0,0.35)) +
   facet_grid(~exposure_hypothesis) + 
   scale_y_discrete("sHCoV", expand = c(0,0)) + 
   scale_x_discrete("Seroreversion rate (ρ)",expand = c(0,0)) +
@@ -1720,13 +1555,13 @@ fig_rmse_ordered <- return_simulations %>%
         strip.background = element_rect(colour="white", fill="white"),
         panel.border = element_rect(colour = "black", fill=NA),
         panel.spacing = unit(0.5, "cm"), aspect.ratio=1) 
-fig_rmse_ordered
+fig_rmse_direct
   
 
 ```
 
 
-## Plot direct
+## Plot sequential
 ```{r}
 
 
@@ -1810,7 +1645,7 @@ get_subset_minimums <- return_simulations %>%
   ungroup()
 
 
-fig_rmse_variation <- return_simulations %>%
+fig_rmse_sequential <- return_simulations %>%
   filter(exposure != "Binary", waning == "Laddered") %>%
   rename(exposure_hypothesis = exposure) %>%
   select(time, Prop, Type, Group, waning, choose_rho, exposure_hypothesis, strain = strain_type) %>%
@@ -1846,12 +1681,14 @@ fig_rmse_variation <- return_simulations %>%
   ggplot(aes(x = choose_rho, y = strain, fill = rmse_calc)) + 
   geom_tile() +
   geom_text(data = get_subset_minimums, color = "white", aes(label = round(rmse_calc, 4))) +
-  scale_fill_gradientn("RMSE", colors = mypal, n.breaks = 8, limits = c(0,0.3)) +
+  scale_fill_gradientn("RMSE", colors = mypal, n.breaks = 8, limits = c(0,0.35)) +
   facet_grid(~exposure_hypothesis) + 
-  scale_y_discrete("sHCoV", expand = c(0,0)) + 
+  scale_y_discrete("", expand = c(0,0)) + 
   scale_x_discrete("Seroreversion rate (ρ)",expand = c(0,0)) +
   ggtitle(" ", "Sequential waning") + 
       theme(axis.text = element_text(size = 12, color = "black"),
+            axis.text.y = element_blank(),
+            axis.ticks.y = element_blank(),
         axis.title = element_text(size = 12, color = "black"),
         axis.line = element_blank(),
         axis.ticks = element_line(color = "black"),
@@ -1868,7 +1705,7 @@ fig_rmse_variation <- return_simulations %>%
         strip.background = element_rect(colour="white", fill="white"),
         panel.border = element_rect(colour = "black", fill=NA),
         panel.spacing = unit(0.5, "cm"), aspect.ratio=1) 
-fig_rmse_variation
+fig_rmse_sequential
 
 ```
 
@@ -1877,9 +1714,11 @@ fig_rmse_variation
 ```{r}
 #fig_binary_traj <- plot_grid(fig2a, fig2d, labels = c("A", "B"), rel_widths = c(1, 1.5))
 
-fig_rmse_gradient <- plot_grid(fig_rmse_ordered, fig_rmse_variation, rel_widths = c(1, 1.26))
+fig3bc <- plot_grid(NULL, fig_rmse_direct, fig_rmse_sequential, nrow = 1, labels = c("B","", "C"), rel_widths = c(0.05,1.4,1.5))
 
-ggsave("../Supplement/RMSE_Gradient.jpg", fig_rmse_gradient, width = 10, height = 3.5)
+fig3 <- plot_grid(fig_rmse_binary, fig3bc, nrow = 1, rel_widths = c(0.8,2.9), labels = c("A", ""))
+
+ggsave("../Supplement/RMSE.jpg", fig3, width = 15, height = 4)
 
 ```
 
@@ -2369,7 +2208,7 @@ get_FOI <- rbind(data_paramsB, data_paramsB_null) %>% left_join(traj_props, by =
   ggplot(aes(x = time, y = weighted_avg)) + 
   geom_line(aes(color = strain), size = 1) + 
   scale_color_manual("sHCoV", values = mycolors) + 
-  scale_y_continuous("Seroconversion rate (weighted average)", expand = c(0,0)) +
+  scale_y_continuous("Seroconversion rate (1/years)", expand = c(0,0)) +
   scale_x_continuous("Age (years)", limits = c(0,25), expand = c(0,0)) +
   theme_bw() +
   ggtitle("Average seroconversion rate by age") +
